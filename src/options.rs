@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[clap(
     name = "HopCoP",
     about = env!("CARGO_PKG_DESCRIPTION"),
-    version = 
+    version =
     author = env!("CARGO_PKG_AUTHORS")
 )]
 */

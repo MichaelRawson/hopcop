@@ -116,7 +116,7 @@ impl PP {
             Nnf::Exists(x, f) => {
                 let arity = self.bound.len();
                 self.fresh_skolem += 1;
-                let symbol = self.builder.register_new_symbol(Symbol {
+                let symbol = self.builder.symbol(Symbol {
                     arity,
                     sort: Sort::Obj,
                     name: Name::Skolem(self.fresh_skolem),
@@ -160,7 +160,7 @@ impl PP {
                 literal.variables(&mut vars);
             }
         }
-        let symbol = self.builder.register_new_symbol(Symbol {
+        let symbol = self.builder.symbol(Symbol {
             arity: vars.len(),
             sort: Sort::Bool,
             name: Name::Definition(self.fresh_definition),

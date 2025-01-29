@@ -8,13 +8,13 @@ pub(crate) enum Sort {
     Obj,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Name {
     Equality,
-    Atom(String),
-    Quoted(String),
-    Number(String),
-    Distinct(String),
+    Atom(&'static str),
+    Quoted(&'static str),
+    Number(&'static str),
+    Distinct(&'static str),
     Skolem(usize),
     Definition(usize),
 }
@@ -38,7 +38,7 @@ impl Name {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Symbol {
     pub(crate) arity: usize,
     pub(crate) sort: Sort,
@@ -73,20 +73,20 @@ impl fmt::Display for Application {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) enum Term {
-    Variable(usize),
-    Application(Perfect<Application>),
+    Var(usize),
+    App(Perfect<Application>),
 }
 
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Variable(x) => write!(f, "X{}", x),
-            Term::Application(app) => write!(f, "{}", app),
+            Term::Var(x) => write!(f, "X{}", x),
+            Term::App(app) => write!(f, "{}", app),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Literal {
     pub(crate) polarity: bool,
     pub(crate) atom: Perfect<Application>,
@@ -107,7 +107,13 @@ pub(crate) struct Disequation {
     pub(crate) right: Term,
 }
 
-#[derive(Debug)]
+impl fmt::Display for Disequation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ≠ {}", self.left, self.right)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Position {
     pub(crate) clause: &'static Clause,
     pub(crate) literal: Literal,
@@ -161,7 +167,7 @@ impl fmt::Display for Clause {
 pub(crate) struct Matrix {
     pub(crate) clauses: Vec<&'static Clause>,
     pub(crate) start: Vec<&'static Clause>,
-    pub(crate) index: FnvHashMap<Perfect<Symbol>, [Vec<Position>; 2]>,
+    pub(crate) connections: FnvHashMap<Literal, Vec<Position>>,
     pub(crate) have_conjecture: bool,
 }
 
@@ -172,7 +178,7 @@ pub(crate) enum RcTerm {
 }
 
 impl RcTerm {
-    pub(crate) fn variables(&self, vars: &mut FnvHashSet<usize>) {
+    fn variables(&self, vars: &mut FnvHashSet<usize>) {
         match self {
             Self::Variable(x) => {
                 vars.insert(*x);

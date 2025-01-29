@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
@@ -61,7 +62,7 @@ impl<T> std::ops::Deref for Perfect<T> {
     }
 }
 
-impl<T> std::borrow::Borrow<T> for Perfect<T> {
+impl<T> Borrow<T> for Perfect<T> {
     fn borrow(&self) -> &T {
         self.0
     }

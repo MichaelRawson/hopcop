@@ -1,8 +1,7 @@
 use crate::pp::PP;
 use crate::syntax::{self, RcApplication, RcTerm, Sort};
-use crate::util::Perfect;
 use anyhow::Context;
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashSet;
 use memmap::Mmap;
 use std::path::Path;
 use std::rc::Rc;
@@ -57,13 +56,6 @@ fn read_path(parent: Option<&path::Path>, path: &path::Path) -> anyhow::Result<O
     Ok(map)
 }
 
-#[derive(PartialEq, Eq, Hash)]
-struct SymbolEntry<'a> {
-    arity: usize,
-    sort: Sort,
-    name: &'a str,
-}
-
 #[derive(Default)]
 struct Loader {
     pp: PP,
@@ -71,10 +63,7 @@ struct Loader {
     // TODO use hashmap as well
     free: Vec<(String, usize)>,
     bound: Vec<(String, usize)>,
-    lower: FnvHashMap<SymbolEntry<'static>, Perfect<syntax::Symbol>>,
-    quoted: FnvHashMap<SymbolEntry<'static>, Perfect<syntax::Symbol>>,
-    number: FnvHashMap<String, Perfect<syntax::Symbol>>,
-    distinct: FnvHashMap<String, Perfect<syntax::Symbol>>,
+    strings: FnvHashSet<&'static str>,
 }
 
 impl Loader {
@@ -82,34 +71,32 @@ impl Loader {
         self.pp.finish()
     }
 
-    fn defined_term(&mut self, term: common::DefinedTerm, sort: Sort) -> RcApplication {
-        let (lookup, borrowed) = match term {
-            common::DefinedTerm::Number(ref number) => {
-                let borrowed = match number {
-                    Number::Integer(n) => n.0,
-                    Number::Rational(r) => r.0,
-                    Number::Real(r) => r.0,
-                };
-                (&mut self.number, borrowed)
-            }
-            common::DefinedTerm::Distinct(ref distinct) => (&mut self.distinct, distinct.0),
-        };
-        let symbol = if let Some(symbol) = lookup.get(borrowed) {
-            *symbol
+    fn intern(&mut self, str: &str) -> &'static str {
+        if let Some(already) = self.strings.get(str) {
+            already
         } else {
-            let string = borrowed.to_string();
-            let name = match term {
-                common::DefinedTerm::Number(_) => syntax::Name::Number(string.clone()),
-                common::DefinedTerm::Distinct(_) => syntax::Name::Distinct(string.clone()),
-            };
-            let arity = 0;
-            let symbol = self
-                .pp
-                .builder
-                .register_new_symbol(syntax::Symbol { arity, sort, name });
-            lookup.insert(string, symbol);
-            symbol
+            let str = Box::leak(str.to_string().into_boxed_str());
+            self.strings.insert(str);
+            str
+        }
+    }
+
+    fn defined_term(&mut self, term: common::DefinedTerm, sort: Sort) -> RcApplication {
+        let name = match term {
+            common::DefinedTerm::Number(number) => syntax::Name::Number(match number {
+                Number::Integer(Integer(n)) => self.intern(n),
+                Number::Rational(Rational(r)) => self.intern(r),
+                Number::Real(Real(r)) => self.intern(r),
+            }),
+            common::DefinedTerm::Distinct(DistinctObject(distinct)) => {
+                syntax::Name::Distinct(self.intern(distinct))
+            }
         };
+        let symbol = self.pp.builder.symbol(syntax::Symbol {
+            arity: 0,
+            sort,
+            name,
+        });
         RcApplication {
             symbol,
             args: vec![].into(),
@@ -121,40 +108,15 @@ impl Loader {
             PlainTerm::Constant(c) => (c.0 .0, vec![]),
             PlainTerm::Function(f, args) => (f.0, args.0),
         };
-        let (lookup, name) = match symbol {
-            AtomicWord::Lower(ref w) => (&mut self.lower, w.0),
-            AtomicWord::SingleQuoted(ref q) => (&mut self.quoted, q.0),
+        let name = match symbol {
+            AtomicWord::Lower(LowerWord(w)) => syntax::Name::Atom(self.intern(w)),
+            AtomicWord::SingleQuoted(SingleQuoted(q)) => syntax::Name::Quoted(self.intern(q)),
         };
-        let entry = SymbolEntry {
+        let symbol = self.pp.builder.symbol(syntax::Symbol {
             arity: args.len(),
             sort,
             name,
-        };
-        let symbol = if let Some(symbol) = lookup.get(&entry) {
-            *symbol
-        } else {
-            let name = match symbol {
-                AtomicWord::Lower(_) => syntax::Name::Atom(name.into()),
-                AtomicWord::SingleQuoted(_) => syntax::Name::Quoted(name.into()),
-            };
-            let symbol = self.pp.builder.register_new_symbol(syntax::Symbol {
-                arity: args.len(),
-                sort,
-                name,
-            });
-            let name = match &symbol.0.name {
-                syntax::Name::Atom(name) => name,
-                syntax::Name::Quoted(name) => name,
-                _ => unreachable!(),
-            };
-            let entry = SymbolEntry {
-                arity: args.len(),
-                sort,
-                name,
-            };
-            lookup.insert(entry, symbol);
-            symbol
-        };
+        });
         let args = args
             .into_iter()
             .map(|t| self.fof_term(t, Sort::Obj))

@@ -1,6 +1,7 @@
 mod builder;
 mod options;
 mod pp;
+mod subst;
 mod syntax;
 mod tptp;
 mod tstp;
@@ -9,39 +10,17 @@ mod util;
 use crate::options::Options;
 use anyhow::Context;
 use std::io::stdout;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const STACK: usize = 0x1000000;
 
 fn report_err<T>(err: anyhow::Error) -> T {
-    eprintln!("satcop: {:?}", err.context("fatal error, exiting"));
+    eprintln!("hopcop: {:?}", err.context("fatal error, exiting"));
     std::process::exit(1);
 }
 
-/*
-fn go(matrix: Arc<Matrix>, options: Arc<Options>) {
-    let mut search = Search::default();
-    //search.seed(index as u64);
-    search.go(&matrix);
-
-    let stdout = stdout();
-    let mut lock = stdout.lock();
-    if options.statistics {
-        statistics::print(&mut lock)
-            .context("printing statistics")
-            .unwrap_or_else(report_err);
-    }
-    search
-        .print_proof(&mut lock, &options, &matrix)
-        .context("printing proof")
-        .unwrap_or_else(report_err);
-    std::process::exit(0);
-}
-*/
-
-fn main() {
-    let start = Instant::now();
-    let options = Options::new();
+fn start(options: &Options) {
     let matrix = tptp::load(&options.path).unwrap_or_else(|err| {
         tstp::load_error(&err);
         report_err(err)
@@ -55,37 +34,38 @@ fn main() {
     if matrix.start.is_empty() {
         let stdout = stdout();
         let mut lock = stdout.lock();
-        tstp::gaveup(&mut lock, &options)
-            .context("printing gaveup")
+        tstp::gaveup(&mut lock, options)
+            .context("giving up")
             .unwrap_or_else(report_err);
-        return;
     }
+    std::process::exit(0);
+}
 
-    /*
+fn main() {
+    let start_time = Instant::now();
+    let options = Arc::new(Options::new());
+
     let thread_options = options.clone();
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .stack_size(STACK)
-        .name("satcop".to_string())
-        .spawn(move || go(matrix, thread_options))
-        .context("spawning thread")
+        .name("hopcop".to_string())
+        .spawn(move || start(&thread_options))
+        .context("spawning thread with large stack")
         .unwrap_or_else(report_err);
-    */
 
-    if let Some(limit) = options.time {
-        let assigned = Duration::new(limit, 0);
-        let elapsed = start.elapsed();
+    if let Some(time_limit) = options.time {
+        let assigned = Duration::new(time_limit, 0);
+        let elapsed = start_time.elapsed();
         if let Some(remaining) = assigned.checked_sub(elapsed) {
             std::thread::sleep(remaining);
         }
         let stdout = stdout();
         let mut lock = stdout.lock();
         tstp::timeout(&mut lock, &options)
-            .context("printing timeout")
+            .context("reporting timeout")
             .unwrap_or_else(report_err);
         std::process::exit(0);
     } else {
-        loop {
-            std::thread::sleep(Duration::new(u64::MAX, 0));
-        }
+        let _ = thread.join();
     }
 }

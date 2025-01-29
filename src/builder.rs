@@ -1,16 +1,18 @@
+use crate::subst::{Substitution, Tagged};
 use crate::syntax::*;
 use crate::util::Perfect;
-use fnv::FnvHashSet;
+use fnv::{FnvHashMap, FnvHashSet};
 
 #[derive(Default)]
 pub(crate) struct Builder {
     matrix: Matrix,
-    applications: FnvHashSet<Perfect<Application>>,
+    symbols: FnvHashSet<&'static Symbol>,
+    applications: FnvHashSet<&'static Application>,
     goals: Vec<&'static Clause>,
     positives: Vec<&'static Clause>,
-    congruent_symbols: Vec<Perfect<Symbol>>,
     equality: Option<Perfect<Symbol>>,
     has_non_goal: bool,
+    subst: Substitution,
 }
 
 impl Builder {
@@ -18,8 +20,29 @@ impl Builder {
         self.matrix.have_conjecture = true;
     }
 
+    pub(crate) fn symbol(&mut self, symbol: Symbol) -> Perfect<Symbol> {
+        if let Some(already) = self.symbols.get(&symbol) {
+            Perfect(already)
+        } else {
+            let symbol = Box::leak(Box::new(symbol));
+            self.symbols.insert(symbol);
+            Perfect(symbol)
+        }
+    }
+
+    pub(crate) fn application(&mut self, app: Application) -> Perfect<Application> {
+        if let Some(already) = self.applications.get(&app) {
+            Perfect(already)
+        } else {
+            let app = Box::leak(Box::new(app));
+            self.applications.insert(app);
+            Perfect(app)
+        }
+    }
+
     pub(crate) fn finish(mut self) -> Matrix {
         self.add_equality_axioms();
+        self.fill_connections();
         if self.goals.is_empty() || !self.has_non_goal {
             self.matrix.start = self.positives;
         } else {
@@ -37,21 +60,28 @@ impl Builder {
         let positive = literals.iter().all(|lit| lit.polarity);
         info.number = self.matrix.clauses.len();
 
+        let mut disequations = vec![];
         for i in 0..literals.len() {
             let l = &literals[i];
             for k in literals.iter().skip(i + 1) {
                 if l.polarity != k.polarity && l.atom.symbol == k.atom.symbol {
                     let disequation = Disequation {
-                        left: Term::Application(l.atom),
-                        right: Term::Application(k.atom),
+                        left: Term::App(l.atom),
+                        right: Term::App(k.atom),
                     };
-                    // TODO check disequation possibly fires and put into clause
+                    self.subst.clear();
+                    if self
+                        .subst
+                        .unify(disequation.left.into(), disequation.right.into())
+                    {
+                        disequations.push(disequation)
+                    }
                 }
             }
         }
         let clause = Box::leak(Box::new(Clause {
             literals,
-            disequations: vec![],
+            disequations,
             info,
         }));
         self.matrix.clauses.push(clause);
@@ -78,14 +108,6 @@ impl Builder {
         symbol
     }
 
-    pub(crate) fn register_new_symbol(&mut self, symbol: Symbol) -> Perfect<Symbol> {
-        let symbol = Perfect::new(symbol);
-        if symbol.name.needs_congruence() && symbol.arity > 0 {
-            self.congruent_symbols.push(symbol);
-        }
-        symbol
-    }
-
     fn add_equality_axioms(&mut self) {
         let eq = if let Some(eq) = self.equality {
             eq
@@ -97,13 +119,17 @@ impl Builder {
             source: Source::Equality,
             number: self.matrix.clauses.len(),
         };
-        while let Some(symbol) = self.congruent_symbols.pop() {
+        let symbols = std::mem::take(&mut self.symbols);
+        for symbol in symbols.into_iter().map(Perfect) {
+            if symbol.arity == 0 || !symbol.name.needs_congruence() {
+                continue;
+            }
             let mut clause = vec![];
             let mut args1 = vec![];
             let mut args2 = vec![];
             for i in 0..symbol.arity {
-                let x = Term::Variable(2 * i);
-                let y = Term::Variable(2 * i + 1);
+                let x = Term::Var(2 * i);
+                let y = Term::Var(2 * i + 1);
                 clause.push(Literal {
                     polarity: false,
                     atom: self.equality(eq, x, y),
@@ -123,7 +149,7 @@ impl Builder {
                 Sort::Obj => {
                     clause.push(Literal {
                         polarity: true,
-                        atom: self.equality(eq, Term::Application(t1), Term::Application(t2)),
+                        atom: self.equality(eq, Term::App(t1), Term::App(t2)),
                     });
                 }
                 Sort::Bool => {
@@ -140,9 +166,9 @@ impl Builder {
             self.clause(clause, info.clone());
         }
 
-        let x = Term::Variable(0);
-        let y = Term::Variable(1);
-        let z = Term::Variable(2);
+        let x = Term::Var(0);
+        let y = Term::Var(1);
+        let z = Term::Var(2);
         let xx = self.equality(eq, x, x);
         let xy = self.equality(eq, x, y);
         let yx = self.equality(eq, y, x);
@@ -211,18 +237,44 @@ impl Builder {
 
     fn rc_term(&mut self, term: &RcTerm) -> Term {
         match term {
-            RcTerm::Variable(x) => Term::Variable(*x),
-            RcTerm::Application(app) => Term::Application(self.rc_application(app)),
+            RcTerm::Variable(x) => Term::Var(*x),
+            RcTerm::Application(app) => Term::App(self.rc_application(app)),
         }
     }
 
-    fn application(&mut self, app: Application) -> Perfect<Application> {
-        if let Some(already) = self.applications.get(&app) {
-            *already
-        } else {
-            let shared = Perfect::new(app);
-            self.applications.insert(shared);
-            shared
+    fn fill_connections(&mut self) {
+        let mut literals = FnvHashSet::default();
+        let mut symbol_map: FnvHashMap<_, Vec<_>> = FnvHashMap::default();
+        for clause in &self.matrix.clauses {
+            for literal in &clause.literals {
+                literals.insert(*literal);
+                symbol_map
+                    .entry((literal.polarity, literal.atom.symbol))
+                    .or_default()
+                    .push(Position {
+                        clause,
+                        literal: *literal,
+                    });
+            }
+        }
+
+        for literal in literals {
+            println!("{}", literal);
+            let entry = self.matrix.connections.entry(literal).or_default();
+            for position in symbol_map
+                .get(&(!literal.polarity, literal.atom.symbol))
+                .into_iter()
+                .flatten()
+            {
+                self.subst.clear();
+                if !self.subst.unify(
+                    Tagged::new(0, Term::App(literal.atom)),
+                    Tagged::new(1, Term::App(position.literal.atom)),
+                ) {
+                    continue;
+                }
+                entry.push(*position);
+            }
         }
     }
 }
