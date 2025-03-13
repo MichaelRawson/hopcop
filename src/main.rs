@@ -41,7 +41,8 @@ fn start(options: &Options) {
             .unwrap_or_else(report_err);
     }
 
-    let mut search = Search::new(matrix);
+    let mut search = Search::new(&matrix);
+    search.expand_or_backtrack();
     search.expand_or_backtrack();
     search.expand_or_backtrack();
     search.graphviz();

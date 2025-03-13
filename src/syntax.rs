@@ -92,12 +92,24 @@ pub(crate) struct Literal {
     pub(crate) atom: Perfect<Application>,
 }
 
+impl Literal {
+    pub(crate) fn atom(self) -> Perfect<Application> {
+        self.atom
+    }
+}
+
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if !self.polarity {
-            write!(f, "~")?;
+        if self.atom.symbol.is_equality() {
+            self.atom.args[0].fmt(f)?;
+            write!(f, "{}", if self.polarity { " = " } else { " != " })?;
+            self.atom.args[1].fmt(f)
+        } else {
+            if !self.polarity {
+                write!(f, "~")?;
+            }
+            write!(f, "{}", self.atom)
         }
-        write!(f, "{}", self.atom)
     }
 }
 

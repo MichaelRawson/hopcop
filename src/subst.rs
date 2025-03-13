@@ -1,5 +1,7 @@
+use std::fmt;
+
 use crate::{
-    syntax::{Application, Term},
+    syntax::{Application, Literal, Term},
     util::Perfect,
 };
 use fnv::FnvHashMap;
@@ -13,6 +15,12 @@ pub(crate) struct Tagged<T> {
 impl<T> From<T> for Tagged<T> {
     fn from(item: T) -> Self {
         Self { offset: 0, item }
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for Tagged<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.item, self.offset)
     }
 }
 
@@ -39,11 +47,39 @@ impl<T> Tagged<T> {
 #[derive(Default, Debug)]
 pub(crate) struct Substitution {
     map: FnvHashMap<Tagged<usize>, Tagged<Term>>,
+    trail: Vec<Tagged<usize>>,
+}
+
+impl fmt::Display for Substitution {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{")?;
+        let mut first = true;
+        for x in &self.trail {
+            if !first {
+                write!(f, ", ")?;
+            }
+            write!(f, "{} -> {}", x, self.map[x])?;
+            first = false;
+        }
+        write!(f, "}}")
+    }
 }
 
 impl Substitution {
+    pub(crate) fn len(&self) -> usize {
+        self.trail.len()
+    }
+
     pub(crate) fn clear(&mut self) {
         self.map.clear()
+    }
+
+    pub(crate) fn undo_to(&mut self, point: usize) {
+        assert!(point <= self.len());
+        while point < self.len() {
+            let next = self.trail.pop().unwrap();
+            assert!(self.map.remove(&next).is_some());
+        }
     }
 
     pub(crate) fn unify(&mut self, left: Tagged<Term>, right: Tagged<Term>) -> bool {
@@ -57,8 +93,10 @@ impl Substitution {
                 continue;
             }
             match (left.item, right.item) {
-                (Term::Var(x), t @ Term::Var(_)) => {
-                    self.map.insert(left.transfer(x), right.transfer(t));
+                (Term::Var(x), Term::Var(_)) => {
+                    let left = left.transfer(x);
+                    self.map.insert(left, right);
+                    self.trail.push(left);
                 }
                 (Term::Var(x), Term::App(app)) => {
                     if !self.bind(left.transfer(x), right.transfer(app)) {
@@ -85,6 +123,21 @@ impl Substitution {
         true
     }
 
+    pub(crate) fn unify_application(
+        &mut self,
+        left: Tagged<Perfect<Application>>,
+        right: Tagged<Perfect<Application>>,
+    ) -> bool {
+        self.unify(left.map(Term::App), right.map(Term::App))
+    }
+
+    pub(crate) fn connect(&mut self, left: Tagged<Literal>, right: Tagged<Literal>) -> bool {
+        if left.item.polarity == right.item.polarity {
+            return false;
+        }
+        self.unify_application(left.map(Literal::atom), right.map(Literal::atom))
+    }
+
     fn bind(&mut self, x: Tagged<usize>, t: Tagged<Perfect<Application>>) -> bool {
         let mut todo: Vec<_> = t.item.args.iter().map(|arg| t.transfer(*arg)).collect();
         while let Some(next) = todo.pop() {
@@ -101,6 +154,7 @@ impl Substitution {
             }
         }
         self.map.insert(x, t.map(Term::App));
+        self.trail.push(x);
         true
     }
 
