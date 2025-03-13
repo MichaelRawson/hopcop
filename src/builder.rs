@@ -1,7 +1,7 @@
-use crate::subst::{Substitution, Tagged};
+use crate::subst::Substitution;
 use crate::syntax::*;
 use crate::util::Perfect;
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashSet;
 
 #[derive(Default)]
 pub(crate) struct Builder {
@@ -42,7 +42,6 @@ impl Builder {
 
     pub(crate) fn finish(mut self) -> Matrix {
         self.add_equality_axioms();
-        self.fill_connections();
         if self.goals.is_empty() || !self.has_non_goal {
             self.matrix.start = self.positives;
         } else {
@@ -92,6 +91,16 @@ impl Builder {
             self.goals.push(clause);
         } else {
             self.has_non_goal = true;
+        }
+        for literal in &clause.literals {
+            self.matrix
+                .index
+                .entry((literal.polarity, literal.atom.symbol))
+                .or_default()
+                .push(Position {
+                    clause,
+                    literal: *literal,
+                });
         }
     }
 
@@ -239,42 +248,6 @@ impl Builder {
         match term {
             RcTerm::Variable(x) => Term::Var(*x),
             RcTerm::Application(app) => Term::App(self.rc_application(app)),
-        }
-    }
-
-    fn fill_connections(&mut self) {
-        let mut literals = FnvHashSet::default();
-        let mut symbol_map: FnvHashMap<_, Vec<_>> = FnvHashMap::default();
-        for clause in &self.matrix.clauses {
-            for literal in &clause.literals {
-                literals.insert(*literal);
-                symbol_map
-                    .entry((literal.polarity, literal.atom.symbol))
-                    .or_default()
-                    .push(Position {
-                        clause,
-                        literal: *literal,
-                    });
-            }
-        }
-
-        for literal in literals {
-            println!("{}", literal);
-            let entry = self.matrix.connections.entry(literal).or_default();
-            for position in symbol_map
-                .get(&(!literal.polarity, literal.atom.symbol))
-                .into_iter()
-                .flatten()
-            {
-                self.subst.clear();
-                if !self.subst.unify(
-                    Tagged::new(0, Term::App(literal.atom)),
-                    Tagged::new(1, Term::App(position.literal.atom)),
-                ) {
-                    continue;
-                }
-                entry.push(*position);
-            }
         }
     }
 }

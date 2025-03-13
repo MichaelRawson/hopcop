@@ -1,6 +1,7 @@
 mod builder;
 mod options;
 mod pp;
+mod search;
 mod subst;
 mod syntax;
 mod tptp;
@@ -9,6 +10,7 @@ mod util;
 
 use crate::options::Options;
 use anyhow::Context;
+use search::Search;
 use std::io::stdout;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,6 +40,11 @@ fn start(options: &Options) {
             .context("giving up")
             .unwrap_or_else(report_err);
     }
+
+    let mut search = Search::new(matrix);
+    search.expand_or_backtrack();
+    search.expand_or_backtrack();
+    search.graphviz();
     std::process::exit(0);
 }
 

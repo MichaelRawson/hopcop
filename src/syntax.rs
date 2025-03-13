@@ -159,7 +159,11 @@ impl fmt::Display for Clause {
                 write!(f, "| {}", literal)?;
             }
         }
-        write!(f, ").")
+        write!(f, "). %")?;
+        for disequation in &self.disequations {
+            write!(f, " {}", disequation)?;
+        }
+        Ok(())
     }
 }
 
@@ -167,7 +171,7 @@ impl fmt::Display for Clause {
 pub(crate) struct Matrix {
     pub(crate) clauses: Vec<&'static Clause>,
     pub(crate) start: Vec<&'static Clause>,
-    pub(crate) connections: FnvHashMap<Literal, Vec<Position>>,
+    pub(crate) index: FnvHashMap<(bool, Perfect<Symbol>), Vec<Position>>,
     pub(crate) have_conjecture: bool,
 }
 
