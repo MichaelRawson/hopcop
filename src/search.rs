@@ -6,8 +6,6 @@ use crate::subst::{Substitution, Tagged};
 use crate::syntax::{Clause, Literal, Matrix, Position};
 use crate::util::Perfect;
 
-const DEPTH_LIMIT: usize = 4;
-
 #[derive(Debug, Clone, Copy)]
 struct Member {
     parent: usize,
@@ -20,6 +18,36 @@ enum Rule {
     Start(Perfect<Clause>),
     Reduce(usize, usize),
     Extend(usize, Position),
+}
+
+#[derive(Default)]
+struct DB {
+    clauses: Vec<Box<[Rule]>>,
+    set: FnvHashSet<Rule>,
+}
+
+impl DB {
+    fn insert(&mut self, clause: Box<[Rule]>) {
+        self.clauses.push(clause);
+    }
+
+    fn set(&mut self, new: Rule) -> Option<&[Rule]> {
+        // TODO watched-literal shenanigans
+        'clauses: for clause in &self.clauses {
+            for rule in clause {
+                if *rule != new && !self.set.contains(rule) {
+                    continue 'clauses;
+                }
+            }
+            return Some(clause);
+        }
+        self.set.insert(new);
+        None
+    }
+
+    fn clear(&mut self) {
+        self.set.clear();
+    }
 }
 
 impl fmt::Display for Rule {
@@ -50,7 +78,9 @@ pub(crate) struct Search<'matrix> {
     open: VecDeque<usize>,
     substitution: Substitution,
     trail: Vec<Rule>,
-    learned: FnvHashSet<Rule>,
+    learn: FnvHashSet<Rule>,
+    db: DB,
+    depth: usize,
 }
 
 impl<'matrix> Search<'matrix> {
@@ -62,7 +92,9 @@ impl<'matrix> Search<'matrix> {
             open: VecDeque::default(),
             substitution: Substitution::default(),
             trail: vec![],
-            learned: FnvHashSet::default(),
+            learn: FnvHashSet::default(),
+            db: DB::default(),
+            depth: 1,
         }
     }
 
@@ -85,14 +117,19 @@ impl<'matrix> Search<'matrix> {
     }
 
     pub(crate) fn expand_or_backtrack(&mut self) {
-        assert!(!self.closed());
+        if self.closed() {
+            println!("% SZS status Theorem");
+            std::process::exit(0);
+        }
+        /*
         for rule in &self.trail {
             eprint!(" {}", rule);
         }
         eprintln!();
-        self.learned.clear();
+        */
+        self.learn.clear();
 
-        if let Some(at) = self.open.pop_front() {
+        if let Some(at) = self.open.front().copied() {
             let restore = self.substitution.len();
             let member = self.members[&at];
             let mut parent = member.parent;
@@ -107,7 +144,7 @@ impl<'matrix> Search<'matrix> {
             }
 
             let Literal { polarity, atom } = member.literal;
-            if member.depth == DEPTH_LIMIT {
+            if member.depth == self.depth {
                 // TODO more complex logic here to make more general lemmas?
             } else if let Some(positions) = self.matrix.index.get(&(!polarity, atom.symbol)) {
                 for position in positions {
@@ -122,12 +159,11 @@ impl<'matrix> Search<'matrix> {
             for rule in self.trail.iter().rev() {
                 match rule {
                     Rule::Start(_) => {
-                        self.learned.insert(*rule);
+                        self.learn.insert(*rule);
                     }
                     Rule::Extend(here, _) if *here == parent => {
-                        eprintln!("rule: {}", rule);
                         parent = self.members[&parent].parent;
-                        self.learned.insert(*rule);
+                        self.learn.insert(*rule);
                     }
                     _ => {}
                 }
@@ -140,17 +176,43 @@ impl<'matrix> Search<'matrix> {
             }
         }
 
+        if self.learn.is_empty() {
+            self.db = DB::default();
+            self.depth += 1;
+            return;
+        }
+        /*
         eprint!("learn:");
-        for reason in &self.learned {
+        for reason in &self.learn {
             eprint!(" {}", reason);
         }
         eprintln!();
+        */
+        self.db.insert(self.learn.iter().copied().collect());
 
-        self.graphviz();
-        todo!()
+        // TODO do backjumping less stupidly
+        self.members.clear();
+        self.open.clear();
+        self.substitution.clear();
+        self.db.clear();
+        let trail = std::mem::take(&mut self.trail);
+        for rule in trail {
+            if !self.apply_rule(rule) {
+                break;
+            }
+        }
     }
 
     fn apply_rule(&mut self, rule: Rule) -> bool {
+        if let Some(conflict) = self.db.set(rule) {
+            for reason in conflict {
+                if *reason != rule {
+                    self.learn.insert(*reason);
+                }
+            }
+            return false;
+        }
+
         // check for violated learned clauses
         let applicable = match rule {
             Rule::Start(start) => self.start(&start),
@@ -190,6 +252,7 @@ impl<'matrix> Search<'matrix> {
             self.explain_unification_failure(l, k);
             return false;
         }
+        self.open.pop_front();
         true
     }
 
@@ -214,6 +277,7 @@ impl<'matrix> Search<'matrix> {
                 self.open.push_back(location);
             }
         }
+        self.open.pop_front();
         true
     }
 
@@ -245,7 +309,7 @@ impl<'matrix> Search<'matrix> {
                 };
                 if !substitution.connect(l, k) {
                     substitution.undo_to(reset);
-                    self.learned.insert(*rule);
+                    self.learn.insert(*rule);
                     if substitution.connect(l, k) {
                         reset = substitution.len();
                         continue 'find_conflict;
