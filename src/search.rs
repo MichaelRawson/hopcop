@@ -71,12 +71,48 @@ impl fmt::Display for Rule {
     }
 }
 
-pub(crate) struct Search<'matrix> {
-    matrix: &'matrix Matrix,
+#[derive(Default)]
+pub(crate) struct Tableau {
     map: FnvHashMap<(usize, usize), usize>,
-    members: FnvHashMap<usize, Member>,
+    members: Vec<Option<Member>>,
     open: VecDeque<usize>,
     substitution: Substitution,
+}
+
+impl Tableau {
+    fn is_closed(&self) -> bool {
+        self.open.is_empty()
+    }
+
+    fn members(&self) -> impl Iterator<Item = (usize, Member)> {
+        self.members
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.map(|m| (i, m)))
+    }
+
+    fn first_open_branch(&self) -> Option<usize> {
+        self.open.front().copied()
+    }
+
+    fn graphviz(&self) {
+        println!("digraph tableau {{");
+        println!("\tnode [shape=none];");
+        println!("\tl0 [label=\"\"];");
+        for (location, member) in self.members() {
+            println!(
+                "\tl{} [label=\"{}. {}\"];",
+                location, location, member.literal
+            );
+            println!("\tl{} -> l{};", member.parent, location);
+        }
+        println!("}}");
+    }
+}
+
+pub(crate) struct Search<'matrix> {
+    matrix: &'matrix Matrix,
+    tableau: Tableau,
     trail: Vec<Rule>,
     learn: FnvHashSet<Rule>,
     db: DB,
@@ -87,10 +123,7 @@ impl<'matrix> Search<'matrix> {
     pub(crate) fn new(matrix: &'matrix Matrix) -> Self {
         Self {
             matrix,
-            map: FnvHashMap::default(),
-            members: FnvHashMap::default(),
-            open: VecDeque::default(),
-            substitution: Substitution::default(),
+            tableau: Tableau::default(),
             trail: vec![],
             learn: FnvHashSet::default(),
             db: DB::default(),
@@ -98,26 +131,16 @@ impl<'matrix> Search<'matrix> {
         }
     }
 
-    pub(crate) fn closed(&self) -> bool {
-        self.open.is_empty() && !self.trail.is_empty()
+    pub(crate) fn is_closed(&self) -> bool {
+        self.tableau.is_closed() && !self.trail.is_empty()
     }
 
     pub(crate) fn graphviz(&self) {
-        println!("digraph tableau {{");
-        println!("\tnode [shape=none];");
-        println!("\tl0 [label=\"\"];");
-        for (location, member) in &self.members {
-            println!(
-                "\tl{} [label=\"{}. {}\"];",
-                location, location, member.literal
-            );
-            println!("\tl{} -> l{};", member.parent, location);
-        }
-        println!("}}");
+        self.tableau.graphviz()
     }
 
     pub(crate) fn expand_or_backtrack(&mut self) {
-        if self.closed() {
+        if self.is_closed() {
             println!("% SZS status Theorem");
             std::process::exit(0);
         }
@@ -129,17 +152,17 @@ impl<'matrix> Search<'matrix> {
         */
         self.learn.clear();
 
-        if let Some(at) = self.open.front().copied() {
-            let restore = self.substitution.len();
-            let member = self.members[&at];
+        if let Some(at) = self.tableau.first_open_branch() {
+            let restore = self.tableau.substitution.len();
+            let member = self.tableau.members[at].unwrap();
             let mut parent = member.parent;
             while parent != 0 {
-                let member = self.members[&parent];
+                let member = self.tableau.members[parent].unwrap();
                 let grandparent = member.parent;
                 if self.apply_rule(Rule::Reduce(at, parent)) {
                     return;
                 }
-                self.substitution.undo_to(restore);
+                self.tableau.substitution.undo_to(restore);
                 parent = grandparent;
             }
 
@@ -151,7 +174,7 @@ impl<'matrix> Search<'matrix> {
                     if self.apply_rule(Rule::Extend(at, *position)) {
                         return;
                     }
-                    self.substitution.undo_to(restore);
+                    self.tableau.substitution.undo_to(restore);
                 }
             }
 
@@ -162,7 +185,7 @@ impl<'matrix> Search<'matrix> {
                         self.learn.insert(*rule);
                     }
                     Rule::Extend(here, _) if *here == parent => {
-                        parent = self.members[&parent].parent;
+                        parent = self.tableau.members[parent].unwrap().parent;
                         self.learn.insert(*rule);
                     }
                     _ => {}
@@ -179,6 +202,7 @@ impl<'matrix> Search<'matrix> {
         if self.learn.is_empty() {
             self.db = DB::default();
             self.depth += 1;
+            dbg!(self.depth);
             return;
         }
         /*
@@ -191,9 +215,11 @@ impl<'matrix> Search<'matrix> {
         self.db.insert(self.learn.iter().copied().collect());
 
         // TODO do backjumping less stupidly
-        self.members.clear();
-        self.open.clear();
-        self.substitution.clear();
+        for member in &mut self.tableau.members {
+            *member = None;
+        }
+        self.tableau.open.clear();
+        self.tableau.substitution.clear();
         self.db.clear();
         let trail = std::mem::take(&mut self.trail);
         for rule in trail {
@@ -228,8 +254,7 @@ impl<'matrix> Search<'matrix> {
     }
 
     fn start(&mut self, clause: &Clause) -> bool {
-        assert!(self.members.is_empty());
-        assert!(self.open.is_empty());
+        assert!(self.tableau.open.is_empty());
         for (index, literal) in clause.literals.iter().enumerate() {
             let location = self.location(0, index);
             let member = Member {
@@ -237,30 +262,30 @@ impl<'matrix> Search<'matrix> {
                 depth: 0,
                 literal: *literal,
             };
-            assert!(self.members.insert(location, member).is_none());
-            self.open.push_back(location);
+            self.tableau.members[location] = Some(member);
+            self.tableau.open.push_back(location);
         }
         true
     }
 
     fn reduce(&mut self, at: usize, ancestor: usize) -> bool {
-        let l = self.members[&at];
+        let l = self.tableau.members[at].unwrap();
         let l = Tagged::new(l.parent, l.literal);
-        let k = self.members[&ancestor];
+        let k = self.tableau.members[ancestor].unwrap();
         let k = Tagged::new(k.parent, k.literal);
-        if !self.substitution.connect(l, k) {
+        if !self.tableau.substitution.connect(l, k) {
             self.explain_unification_failure(l, k);
             return false;
         }
-        self.open.pop_front();
+        self.tableau.open.pop_front();
         true
     }
 
     fn extend(&mut self, at: usize, position: Position) -> bool {
-        let member = self.members[&at];
+        let member = self.tableau.members[at].unwrap();
         let l = Tagged::new(at, position.literal);
         let k = Tagged::new(member.parent, member.literal);
-        if !self.substitution.connect(l, k) {
+        if !self.tableau.substitution.connect(l, k) {
             self.explain_unification_failure(l, k);
             return false;
         }
@@ -272,12 +297,12 @@ impl<'matrix> Search<'matrix> {
                 depth: member.depth + 1,
                 literal: *literal,
             };
-            self.members.insert(location, member);
+            self.tableau.members[location] = Some(member);
             if *literal != position.literal {
-                self.open.push_back(location);
+                self.tableau.open.push_back(location);
             }
         }
-        self.open.pop_front();
+        self.tableau.open.pop_front();
         true
     }
 
@@ -294,14 +319,14 @@ impl<'matrix> Search<'matrix> {
                 let (l, k) = match rule {
                     Rule::Start(_) => unreachable!(),
                     Rule::Reduce(at, ancestor) => {
-                        let l = self.members[at];
+                        let l = self.tableau.members[*at].unwrap();
                         let l = Tagged::new(l.parent, l.literal);
-                        let k = self.members[ancestor];
+                        let k = self.tableau.members[*ancestor].unwrap();
                         let k = Tagged::new(k.parent, k.literal);
                         (l, k)
                     }
                     Rule::Extend(at, position) => {
-                        let member = self.members[at];
+                        let member = self.tableau.members[*at].unwrap();
                         let l = Tagged::new(*at, position.literal);
                         let k = Tagged::new(member.parent, member.literal);
                         (l, k)
@@ -323,7 +348,10 @@ impl<'matrix> Search<'matrix> {
     }
 
     fn location(&mut self, parent: usize, child: usize) -> usize {
-        let next = self.map.len() + 1;
-        *self.map.entry((parent, child)).or_insert(next)
+        let next = self.tableau.map.len();
+        *self.tableau.map.entry((parent, child)).or_insert_with(|| {
+            self.tableau.members.push(None);
+            next
+        })
     }
 }
