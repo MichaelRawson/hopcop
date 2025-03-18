@@ -8,8 +8,8 @@ pub(crate) struct Builder {
     matrix: Matrix,
     symbols: FnvHashSet<&'static Symbol>,
     applications: FnvHashSet<&'static Application>,
-    goals: Vec<&'static Clause>,
-    positives: Vec<&'static Clause>,
+    goals: Vec<Perfect<Clause>>,
+    positives: Vec<Perfect<Clause>>,
     equality: Option<Perfect<Symbol>>,
     has_non_goal: bool,
     subst: Substitution,
@@ -78,11 +78,11 @@ impl Builder {
                 }
             }
         }
-        let clause = Box::leak(Box::new(Clause {
+        let clause = Perfect::new(Clause {
             literals,
             disequations,
             info,
-        }));
+        });
         self.matrix.clauses.push(clause);
         if positive {
             self.positives.push(clause);

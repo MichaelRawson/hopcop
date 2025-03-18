@@ -3,23 +3,45 @@ use crate::syntax::{self, RcApplication, RcTerm, Sort};
 use anyhow::Context;
 use fnv::FnvHashSet;
 use memmap::Mmap;
+use std::error::Error;
 use std::path::Path;
 use std::rc::Rc;
-use std::{env, fs, path};
-use thiserror::Error;
+use std::{env, fmt, fs, path};
 use tptp::cnf::*;
 use tptp::common::*;
 use tptp::fof::*;
 use tptp::top::*;
-use tptp::{cnf, common, fof, TPTPIterator};
+use tptp::{TPTPIterator, cnf, common, fof};
 
-#[derive(Debug, Error)]
-#[error("{}: syntax error", self.0)]
+#[derive(Debug)]
 pub(crate) struct SyntaxError(String);
 
-#[derive(Debug, Error)]
-#[error("unsupported item: {}", self.0)]
+impl fmt::Display for SyntaxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: syntax error", self.0)
+    }
+}
+
+impl Error for SyntaxError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct Unsupported(String);
+
+impl fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unsupported item: {}", self.0)
+    }
+}
+
+impl Error for Unsupported {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
 
 fn open_path_no_parent(path: &path::Path) -> anyhow::Result<fs::File> {
     let directory = env::var("TPTP_DIR")
@@ -105,7 +127,7 @@ impl Loader {
 
     fn fof_plain_term(&mut self, term: PlainTerm, sort: Sort) -> anyhow::Result<RcApplication> {
         let (symbol, args) = match term {
-            PlainTerm::Constant(c) => (c.0 .0, vec![]),
+            PlainTerm::Constant(c) => (c.0.0, vec![]),
             PlainTerm::Function(f, args) => (f.0, args.0),
         };
         let name = match symbol {
@@ -153,7 +175,7 @@ impl Loader {
                 RcTerm::Application(self.fof_function_term(*term, sort)?.into())
             }
             Term::Variable(x) => {
-                let name = x.0 .0;
+                let name = x.0.0;
                 let var = if let Some((_, var)) =
                     self.bound.iter().rev().find(|(bound, _)| bound == name)
                 {
@@ -176,7 +198,7 @@ impl Loader {
         atom: DefinedPlainFormula,
     ) -> anyhow::Result<syntax::Formula> {
         match atom.0 {
-            DefinedPlainTerm::Constant(c) => match c.0 .0 .0 .0 .0 {
+            DefinedPlainTerm::Constant(c) => match c.0.0.0.0.0 {
                 "true" => Ok(syntax::Formula::Bool(true)),
                 "false" => Ok(syntax::Formula::Bool(false)),
                 _ => Err(Unsupported(c.to_string()).into()),
@@ -279,7 +301,7 @@ impl Loader {
     ) -> anyhow::Result<syntax::Formula> {
         let num_bound = fof.bound.0.len();
         for x in fof.bound.0.into_iter() {
-            let string = x.0 .0.to_string();
+            let string = x.0.0.to_string();
             let var = self.fresh;
             self.fresh += 1;
             self.bound.push((string, var));
@@ -391,7 +413,7 @@ impl Loader {
             match statement {
                 TPTPInput::Annotated(annotated) => match *annotated {
                     AnnotatedFormula::Tfx(_) => {
-                        return Err(Unsupported(annotated.to_string()).into())
+                        return Err(Unsupported(annotated.to_string()).into());
                     }
                     AnnotatedFormula::Fof(fof) => {
                         self.annotated(selection.as_ref(), display_path.clone(), fof.0)?;

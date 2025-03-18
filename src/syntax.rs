@@ -125,9 +125,9 @@ impl fmt::Display for Disequation {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Position {
-    pub(crate) clause: &'static Clause,
+    pub(crate) clause: Perfect<Clause>,
     pub(crate) literal: Literal,
 }
 
@@ -168,7 +168,7 @@ impl fmt::Display for Clause {
         } else {
             write!(f, "{}", self.literals[0])?;
             for literal in &self.literals[1..] {
-                write!(f, "| {}", literal)?;
+                write!(f, " | {}", literal)?;
             }
         }
         write!(f, "). %")?;
@@ -181,8 +181,8 @@ impl fmt::Display for Clause {
 
 #[derive(Debug, Default)]
 pub(crate) struct Matrix {
-    pub(crate) clauses: Vec<&'static Clause>,
-    pub(crate) start: Vec<&'static Clause>,
+    pub(crate) clauses: Vec<Perfect<Clause>>,
+    pub(crate) start: Vec<Perfect<Clause>>,
     pub(crate) index: FnvHashMap<(bool, Perfect<Symbol>), Vec<Position>>,
     pub(crate) have_conjecture: bool,
 }

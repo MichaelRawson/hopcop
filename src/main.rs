@@ -42,9 +42,9 @@ fn start(options: &Options) {
     }
 
     let mut search = Search::new(&matrix);
-    search.expand_or_backtrack();
-    search.expand_or_backtrack();
-    search.expand_or_backtrack();
+    loop {
+        search.expand_or_backtrack();
+    }
     search.graphviz();
     std::process::exit(0);
 }
