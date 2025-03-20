@@ -1,120 +1,86 @@
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::{FnvBuildHasher, FnvHashSet};
+use indexmap::IndexSet;
 use std::collections::VecDeque;
 use std::fmt;
 
 use crate::subst::{Substitution, Tagged};
-use crate::syntax::{Clause, Literal, Matrix, Position};
-use crate::util::Perfect;
+use crate::syntax::{Clause, Extension, Literal, Matrix};
+use crate::tableau::{Location, ROOT, Tableau};
 
-#[derive(Debug, Clone, Copy)]
-struct Member {
-    parent: usize,
-    depth: usize,
-    literal: Literal,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Propagate {
+    Place(Location, Literal),
+    Connect(Location, Location),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Rule {
-    Start(Perfect<Clause>),
-    Reduce(usize, usize),
-    Extend(usize, Position),
+impl fmt::Display for Propagate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Propagate::Place(location, literal) => write!(f, "({})@{}", literal, location),
+            Propagate::Connect(l, k) => write!(f, "{}~{}", l, k),
+        }
+    }
 }
 
 #[derive(Default)]
 struct DB {
-    clauses: Vec<Box<[Rule]>>,
-    set: FnvHashSet<Rule>,
+    clauses: Vec<Box<[Propagate]>>,
 }
 
 impl DB {
-    fn insert(&mut self, clause: Box<[Rule]>) {
+    fn insert(&mut self, clause: Box<[Propagate]>) {
         self.clauses.push(clause);
     }
 
-    fn set(&mut self, new: Rule) -> Option<&[Rule]> {
+    fn set(
+        &mut self,
+        set: Propagate,
+        already: &IndexSet<Propagate, FnvBuildHasher>,
+    ) -> Option<&[Propagate]> {
         // TODO watched-literal shenanigans
         'clauses: for clause in &self.clauses {
             for rule in clause {
-                if *rule != new && !self.set.contains(rule) {
+                if *rule != set && !already.contains(rule) {
                     continue 'clauses;
                 }
             }
             return Some(clause);
         }
-        self.set.insert(new);
         None
     }
-
-    fn clear(&mut self) {
-        self.set.clear();
-    }
 }
 
-impl fmt::Display for Rule {
+fn could_unify(l: Literal, k: Literal) -> bool {
+    l.polarity != k.polarity
+        && Substitution::default().unify_application(Tagged::new(0, l.atom), Tagged::new(1, k.atom))
+}
+
+enum Rule<'a> {
+    Start(&'a Clause),
+    Reduce(Location, Location),
+    Extend(Location, &'a Extension),
+}
+
+impl<'a> fmt::Display for Rule<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Rule::Start(start) => write!(f, "s{}", start.info.number),
-            Rule::Reduce(at, ancestor) => write!(f, "r{}-{}", at, ancestor),
-            Rule::Extend(at, position) => write!(
-                f,
-                "e{}-{}-{}",
-                at,
-                position.clause.info.number,
-                position
-                    .clause
-                    .literals
-                    .iter()
-                    .position(|x| x == &position.literal)
-                    .unwrap()
-            ),
+            Rule::Start(clause) => write!(f, "s{}", clause.info.number),
+            Rule::Reduce(l, k) => write!(f, "r{}-{}", l.as_usize(), k.as_usize()),
+            Rule::Extend(l, e) => {
+                write!(f, "e{}-{}-{}", l.as_usize(), e.clause.info.number, e.index)
+            }
         }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct Tableau {
-    map: FnvHashMap<(usize, usize), usize>,
-    members: Vec<Option<Member>>,
-    open: VecDeque<usize>,
-    substitution: Substitution,
-}
-
-impl Tableau {
-    fn is_closed(&self) -> bool {
-        self.open.is_empty()
-    }
-
-    fn members(&self) -> impl Iterator<Item = (usize, Member)> {
-        self.members
-            .iter()
-            .enumerate()
-            .filter_map(|(i, slot)| slot.map(|m| (i, m)))
-    }
-
-    fn first_open_branch(&self) -> Option<usize> {
-        self.open.front().copied()
-    }
-
-    fn graphviz(&self) {
-        println!("digraph tableau {{");
-        println!("\tnode [shape=none];");
-        println!("\tl0 [label=\"\"];");
-        for (location, member) in self.members() {
-            println!(
-                "\tl{} [label=\"{}. {}\"];",
-                location, location, member.literal
-            );
-            println!("\tl{} -> l{};", member.parent, location);
-        }
-        println!("}}");
     }
 }
 
 pub(crate) struct Search<'matrix> {
     matrix: &'matrix Matrix,
     tableau: Tableau,
-    trail: Vec<Rule>,
-    learn: FnvHashSet<Rule>,
+    substitution: Substitution,
+    open: VecDeque<Location>,
+    proof: Vec<Rule<'matrix>>,
+    propagated: IndexSet<Propagate, FnvBuildHasher>,
+    learn: FnvHashSet<Propagate>,
     db: DB,
     depth: usize,
 }
@@ -124,15 +90,18 @@ impl<'matrix> Search<'matrix> {
         Self {
             matrix,
             tableau: Tableau::default(),
-            trail: vec![],
+            substitution: Substitution::default(),
+            open: VecDeque::default(),
+            proof: vec![],
+            propagated: IndexSet::default(),
             learn: FnvHashSet::default(),
             db: DB::default(),
-            depth: 1,
+            depth: 3,
         }
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        self.tableau.is_closed() && !self.trail.is_empty()
+        !self.proof.is_empty() && self.open.is_empty()
     }
 
     pub(crate) fn graphviz(&self) {
@@ -141,217 +110,204 @@ impl<'matrix> Search<'matrix> {
 
     pub(crate) fn expand_or_backtrack(&mut self) {
         if self.is_closed() {
-            println!("% SZS status Theorem");
+            // println!("% SZS status Theorem");
+            self.graphviz();
             std::process::exit(0);
         }
-        /*
-        for rule in &self.trail {
+
+        eprint!("proof:");
+        for rule in &self.proof {
             eprint!(" {}", rule);
         }
         eprintln!();
+        /*
+        eprint!("propagated:");
+        for prop in &self.propagated {
+            eprint!(" {}", prop);
+        }
+        eprintln!();
         */
-        self.learn.clear();
 
-        if let Some(at) = self.tableau.first_open_branch() {
-            let restore = self.tableau.substitution.len();
-            let member = self.tableau.members[at].unwrap();
-            let mut parent = member.parent;
-            while parent != 0 {
-                let member = self.tableau.members[parent].unwrap();
+        self.learn.clear();
+        if let Some(open) = self.open.pop_front() {
+            let node = self.tableau[open];
+            self.learn.insert(Propagate::Place(open, node.literal));
+            let mut parent = node.parent;
+            while parent != ROOT {
+                let member = self.tableau[parent];
                 let grandparent = member.parent;
-                if self.apply_rule(Rule::Reduce(at, parent)) {
+                if self.reduce(parent, open) {
                     return;
                 }
-                self.tableau.substitution.undo_to(restore);
+                self.learn.insert(Propagate::Place(parent, member.literal));
                 parent = grandparent;
             }
 
-            let Literal { polarity, atom } = member.literal;
-            if member.depth == self.depth {
+            let Literal { polarity, atom } = node.literal;
+            if node.depth == self.depth {
                 // TODO more complex logic here to make more general lemmas?
-            } else if let Some(positions) = self.matrix.index.get(&(!polarity, atom.symbol)) {
-                for position in positions {
-                    if self.apply_rule(Rule::Extend(at, *position)) {
+            } else if let Some(extensions) = self.matrix.index.get(&(!polarity, atom.symbol)) {
+                for extension in extensions {
+                    if self.extend(open, extension) {
                         return;
                     }
-                    self.tableau.substitution.undo_to(restore);
                 }
             }
-
-            parent = member.parent;
-            for rule in self.trail.iter().rev() {
-                match rule {
-                    Rule::Start(_) => {
-                        self.learn.insert(*rule);
-                    }
-                    Rule::Extend(here, _) if *here == parent => {
-                        parent = self.tableau.members[parent].unwrap().parent;
-                        self.learn.insert(*rule);
-                    }
-                    _ => {}
-                }
-            }
-        } else if self.trail.is_empty() {
+            self.open.push_front(open);
+        } else {
+            assert!(self.tableau.is_empty());
+            assert!(self.substitution.is_empty());
+            assert!(self.propagated.is_empty());
             for start in &self.matrix.start {
-                if self.apply_rule(Rule::Start(*start)) {
+                if self.start(start) {
                     return;
                 }
             }
         }
-
+        assert!(!self.learn.is_empty());
+        /*
         if self.learn.is_empty() {
             self.db = DB::default();
             self.depth += 1;
             dbg!(self.depth);
             return;
         }
-        /*
+        */
         eprint!("learn:");
         for reason in &self.learn {
             eprint!(" {}", reason);
         }
         eprintln!();
-        */
-        self.db.insert(self.learn.iter().copied().collect());
+        self.db.insert(self.learn.drain().collect());
 
-        // TODO do backjumping less stupidly
-        for member in &mut self.tableau.members {
-            *member = None;
-        }
-        self.tableau.open.clear();
-        self.tableau.substitution.clear();
-        self.db.clear();
-        let trail = std::mem::take(&mut self.trail);
-        for rule in trail {
-            if !self.apply_rule(rule) {
-                break;
-            }
+        let proof = std::mem::take(&mut self.proof);
+        self.begin_replay();
+        for rule in proof {
+            self.replay_rule(rule);
         }
     }
 
-    fn apply_rule(&mut self, rule: Rule) -> bool {
-        if let Some(conflict) = self.db.set(rule) {
-            for reason in conflict {
-                if *reason != rule {
-                    self.learn.insert(*reason);
-                }
-            }
-            return false;
-        }
+    fn begin_replay(&mut self) {
+        self.tableau.clear();
+        self.substitution.clear();
+        self.open.clear();
+        self.propagated.clear();
+    }
 
-        // check for violated learned clauses
-        let applicable = match rule {
-            Rule::Start(start) => self.start(&start),
-            Rule::Reduce(at, ancestor) => self.reduce(at, ancestor),
-            Rule::Extend(at, position) => self.extend(at, position),
+    fn replay_rule(&mut self, rule: Rule<'matrix>) {
+        let ok = match rule {
+            Rule::Start(clause) => self.start(clause),
+            Rule::Reduce(l, k) => self.tableau.contains(k) && self.reduce(l, k),
+            Rule::Extend(at, extend) => self.tableau.contains(at) && self.extend(at, extend),
         };
-        if !applicable {
-            return false;
-        }
-        // check for violated constraints
-        self.trail.push(rule);
-        true
-    }
-
-    fn start(&mut self, clause: &Clause) -> bool {
-        assert!(self.tableau.open.is_empty());
-        for (index, literal) in clause.literals.iter().enumerate() {
-            let location = self.location(0, index);
-            let member = Member {
-                parent: 0,
-                depth: 0,
-                literal: *literal,
-            };
-            self.tableau.members[location] = Some(member);
-            self.tableau.open.push_back(location);
-        }
-        true
-    }
-
-    fn reduce(&mut self, at: usize, ancestor: usize) -> bool {
-        let l = self.tableau.members[at].unwrap();
-        let l = Tagged::new(l.parent, l.literal);
-        let k = self.tableau.members[ancestor].unwrap();
-        let k = Tagged::new(k.parent, k.literal);
-        if !self.tableau.substitution.connect(l, k) {
-            self.explain_unification_failure(l, k);
-            return false;
-        }
-        self.tableau.open.pop_front();
-        true
-    }
-
-    fn extend(&mut self, at: usize, position: Position) -> bool {
-        let member = self.tableau.members[at].unwrap();
-        let l = Tagged::new(at, position.literal);
-        let k = Tagged::new(member.parent, member.literal);
-        if !self.tableau.substitution.connect(l, k) {
-            self.explain_unification_failure(l, k);
-            return false;
-        }
-
-        for (index, literal) in position.clause.literals.iter().enumerate() {
-            let location = self.location(at, index);
-            let member = Member {
-                parent: at,
-                depth: member.depth + 1,
-                literal: *literal,
-            };
-            self.tableau.members[location] = Some(member);
-            if *literal != position.literal {
-                self.tableau.open.push_back(location);
-            }
-        }
-        self.tableau.open.pop_front();
-        true
-    }
-
-    fn explain_unification_failure(&mut self, l: Tagged<Literal>, k: Tagged<Literal>) {
-        let mut substitution = Substitution::default();
-        // they could never connect - TODO improve this
-        if !substitution.connect(l, k) {
+        if !ok {
             return;
         }
-
-        let mut reset = substitution.len();
-        'find_conflict: loop {
-            for rule in &self.trail[1..] {
-                let (l, k) = match rule {
-                    Rule::Start(_) => unreachable!(),
-                    Rule::Reduce(at, ancestor) => {
-                        let l = self.tableau.members[*at].unwrap();
-                        let l = Tagged::new(l.parent, l.literal);
-                        let k = self.tableau.members[*ancestor].unwrap();
-                        let k = Tagged::new(k.parent, k.literal);
-                        (l, k)
-                    }
-                    Rule::Extend(at, position) => {
-                        let member = self.tableau.members[*at].unwrap();
-                        let l = Tagged::new(*at, position.literal);
-                        let k = Tagged::new(member.parent, member.literal);
-                        (l, k)
-                    }
-                };
-                if !substitution.connect(l, k) {
-                    substitution.undo_to(reset);
-                    self.learn.insert(*rule);
-                    if substitution.connect(l, k) {
-                        reset = substitution.len();
-                        continue 'find_conflict;
-                    } else {
-                        break 'find_conflict;
-                    }
-                }
+        match rule {
+            Rule::Start(_) => {}
+            Rule::Reduce(_, at) | Rule::Extend(at, _) => {
+                // TODO avoid this linear-time scan
+                self.open.retain(|x| *x != at);
             }
-            unreachable!()
         }
     }
 
-    fn location(&mut self, parent: usize, child: usize) -> usize {
-        let next = self.tableau.map.len();
-        *self.tableau.map.entry((parent, child)).or_insert_with(|| {
-            self.tableau.members.push(None);
-            next
-        })
+    fn start(&mut self, start: &'matrix Clause) -> bool {
+        for (index, literal) in start.literals.iter().copied().enumerate() {
+            let location = self.tableau.locate(ROOT, index);
+            if !self.propagate(Propagate::Place(location, literal)) {
+                self.tableau.clear();
+                self.propagated.clear();
+                self.open.clear();
+                return false;
+            }
+            self.open.push_back(location);
+            self.tableau.set(literal, location, ROOT, 1);
+        }
+        self.proof.push(Rule::Start(start));
+        true
+    }
+
+    fn reduce(&mut self, parent: Location, open: Location) -> bool {
+        let parent_node = self.tableau[parent];
+        let open_node = self.tableau[open];
+        if !could_unify(parent_node.literal, open_node.literal) {
+            return false;
+        }
+        if !self.substitution.unify_application(
+            Tagged::new(parent_node.parent.as_usize(), parent_node.literal.atom),
+            Tagged::new(open_node.parent.as_usize(), open_node.literal.atom),
+        ) {
+            // TODO explain failure
+            return false;
+        }
+
+        if !self.propagate(Propagate::Connect(parent, open)) {
+            return false;
+        }
+        self.proof.push(Rule::Reduce(parent, open));
+        true
+    }
+
+    fn extend(&mut self, open: Location, extension: &'matrix Extension) -> bool {
+        let open_node = self.tableau[open];
+        let el = extension.clause.literals[extension.index];
+        if !could_unify(open_node.literal, el) {
+            return false;
+        }
+        if !self.substitution.unify_application(
+            Tagged::new(open_node.parent.as_usize(), open_node.literal.atom),
+            Tagged::new(open.as_usize(), el.atom),
+        ) {
+            // TODO explain failure
+            return false;
+        }
+
+        let restore_tab = self.tableau.len();
+        let restore_prop = self.propagated.len();
+        let restore_open = self.open.len();
+        let mut failed = false;
+        for (index, literal) in extension.clause.literals.iter().copied().enumerate() {
+            let location = self.tableau.locate(open, index);
+            if !self.propagate(Propagate::Place(location, literal)) {
+                failed = true;
+                break;
+            }
+            if index == extension.index {
+                if !self.propagate(Propagate::Connect(open, location)) {
+                    failed = true;
+                    break;
+                }
+            } else {
+                self.open.push_back(location);
+            }
+            self.tableau
+                .set(literal, location, open, self.tableau[open].depth + 1);
+        }
+        if failed {
+            self.tableau.truncate(restore_tab);
+            self.undo_propagations(restore_prop);
+            while self.open.len() > restore_open {
+                self.open.pop_back();
+            }
+            return false;
+        }
+
+        self.proof.push(Rule::Extend(open, extension));
+        true
+    }
+
+    fn propagate(&mut self, propagate: Propagate) -> bool {
+        if let Some(conflict) = self.db.set(propagate, &self.propagated) {
+            self.learn
+                .extend(conflict.iter().filter(|x| **x != propagate));
+            return false;
+        }
+        self.propagated.insert(propagate);
+        true
+    }
+
+    fn undo_propagations(&mut self, to: usize) {
+        self.propagated.truncate(to);
     }
 }

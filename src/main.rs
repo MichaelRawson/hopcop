@@ -4,6 +4,7 @@ mod pp;
 mod search;
 mod subst;
 mod syntax;
+mod tableau;
 mod tptp;
 mod tstp;
 mod util;

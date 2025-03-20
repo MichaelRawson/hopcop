@@ -92,12 +92,6 @@ pub(crate) struct Literal {
     pub(crate) atom: Perfect<Application>,
 }
 
-impl Literal {
-    pub(crate) fn atom(self) -> Perfect<Application> {
-        self.atom
-    }
-}
-
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.atom.symbol.is_equality() {
@@ -126,9 +120,9 @@ impl fmt::Display for Disequation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Position {
+pub(crate) struct Extension {
     pub(crate) clause: Perfect<Clause>,
-    pub(crate) literal: Literal,
+    pub(crate) index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -183,7 +177,7 @@ impl fmt::Display for Clause {
 pub(crate) struct Matrix {
     pub(crate) clauses: Vec<Perfect<Clause>>,
     pub(crate) start: Vec<Perfect<Clause>>,
-    pub(crate) index: FnvHashMap<(bool, Perfect<Symbol>), Vec<Position>>,
+    pub(crate) index: FnvHashMap<(bool, Perfect<Symbol>), Vec<Extension>>,
     pub(crate) have_conjecture: bool,
 }
 

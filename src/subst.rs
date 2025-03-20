@@ -1,9 +1,7 @@
 use std::fmt;
 
-use crate::{
-    syntax::{Application, Literal, Term},
-    util::Perfect,
-};
+use crate::syntax::{Application, Term};
+use crate::util::Perfect;
 use fnv::FnvHashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,12 +64,17 @@ impl fmt::Display for Substitution {
 }
 
 impl Substitution {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.trail.len()
     }
 
     pub(crate) fn clear(&mut self) {
-        self.map.clear()
+        self.map.clear();
+        self.trail.clear();
     }
 
     pub(crate) fn undo_to(&mut self, point: usize) {
@@ -83,6 +86,7 @@ impl Substitution {
     }
 
     pub(crate) fn unify(&mut self, left: Tagged<Term>, right: Tagged<Term>) -> bool {
+        let start = self.trail.len();
         let mut todo = vec![];
         let mut next = Some((left, right));
         while let Some((left, right)) = next {
@@ -100,16 +104,19 @@ impl Substitution {
                 }
                 (Term::Var(x), Term::App(app)) => {
                     if !self.bind(left.transfer(x), right.transfer(app)) {
+                        self.undo_to(start);
                         return false;
                     }
                 }
                 (Term::App(t), Term::Var(x)) => {
                     if !self.bind(right.transfer(x), left.transfer(t)) {
+                        self.undo_to(start);
                         return false;
                     }
                 }
                 (Term::App(lapp), Term::App(rapp)) => {
                     if lapp.symbol != rapp.symbol {
+                        self.undo_to(start);
                         return false;
                     }
                     todo.extend(Iterator::zip(
@@ -129,13 +136,6 @@ impl Substitution {
         right: Tagged<Perfect<Application>>,
     ) -> bool {
         self.unify(left.map(Term::App), right.map(Term::App))
-    }
-
-    pub(crate) fn connect(&mut self, left: Tagged<Literal>, right: Tagged<Literal>) -> bool {
-        if left.item.polarity == right.item.polarity {
-            return false;
-        }
-        self.unify_application(left.map(Literal::atom), right.map(Literal::atom))
     }
 
     fn bind(&mut self, x: Tagged<usize>, t: Tagged<Perfect<Application>>) -> bool {

@@ -92,15 +92,12 @@ impl Builder {
         } else {
             self.has_non_goal = true;
         }
-        for literal in &clause.literals {
+        for (index, literal) in clause.literals.iter().enumerate() {
             self.matrix
                 .index
                 .entry((literal.polarity, literal.atom.symbol))
                 .or_default()
-                .push(Position {
-                    clause,
-                    literal: *literal,
-                });
+                .push(Extension { clause, index });
         }
     }
 
