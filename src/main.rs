@@ -1,4 +1,5 @@
 mod builder;
+mod db;
 mod options;
 mod pp;
 mod search;

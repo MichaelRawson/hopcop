@@ -3,49 +3,11 @@ use indexmap::IndexSet;
 use std::collections::VecDeque;
 use std::fmt;
 
+use crate::db::{Atom, DB};
 use crate::subst::{Substitution, Tagged};
 use crate::syntax::{Application, Clause, Extension, Literal, Matrix};
 use crate::tableau::{Location, ROOT, Tableau};
 use crate::util::Perfect;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Atom {
-    Place(Location, Literal),
-    Connect(Location, Location),
-}
-
-impl fmt::Display for Atom {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Atom::Place(location, literal) => write!(f, "{}@{}", literal, location),
-            Atom::Connect(l, k) => write!(f, "{}~{}", l, k),
-        }
-    }
-}
-
-#[derive(Default)]
-struct DB {
-    clauses: Vec<Box<[Atom]>>,
-}
-
-impl DB {
-    fn insert(&mut self, clause: Box<[Atom]>) {
-        self.clauses.push(clause);
-    }
-
-    fn set(&mut self, set: Atom, already: &IndexSet<Atom, FnvBuildHasher>) -> Option<&[Atom]> {
-        // TODO watched-literal shenanigans
-        'clauses: for clause in &self.clauses {
-            for rule in clause {
-                if *rule != set && !already.contains(rule) {
-                    continue 'clauses;
-                }
-            }
-            return Some(clause);
-        }
-        None
-    }
-}
 
 fn could_unify(l: Literal, k: Literal) -> bool {
     l.polarity != k.polarity
@@ -93,7 +55,7 @@ impl<'matrix> Search<'matrix> {
             atoms: IndexSet::default(),
             learn: FnvHashSet::default(),
             db: DB::default(),
-            depth: 4,
+            depth: 1,
         }
     }
 
@@ -107,17 +69,17 @@ impl<'matrix> Search<'matrix> {
 
     pub(crate) fn expand_or_backtrack(&mut self) {
         if self.is_closed() {
-            // println!("% SZS status Theorem");
+            println!("% SZS status Theorem");
             self.graphviz();
             std::process::exit(0);
         }
 
+        /*
         eprint!("proof:");
         for rule in &self.proof {
             eprint!(" {}", rule);
         }
         eprintln!();
-        /*
         eprint!("atoms:");
         for atom in &self.atoms {
             eprint!(" {}", atom);
@@ -162,24 +124,23 @@ impl<'matrix> Search<'matrix> {
                 }
             }
         }
-        assert!(!self.learn.is_empty());
-        /*
+        // assert!(!self.learn.is_empty());
         if self.learn.is_empty() {
             self.db = DB::default();
             self.depth += 1;
             dbg!(self.depth);
             return;
         }
+        /*
         eprint!("learn:");
         for reason in &self.learn {
             eprint!(" {}", reason);
         }
         eprintln!();
         */
-        self.db.insert(self.learn.drain().collect());
-
         let proof = std::mem::take(&mut self.proof);
         self.begin_replay();
+        self.db.insert(self.learn.drain().collect(), &self.atoms);
         for rule in proof {
             self.replay_rule(rule);
         }
@@ -298,7 +259,7 @@ impl<'matrix> Search<'matrix> {
     fn check_atoms_since(&mut self, after: usize) -> bool {
         let atoms = &self.atoms[after..];
         for atom in atoms {
-            if let Some(conflict) = self.db.set(*atom, &self.atoms) {
+            if let Some(conflict) = self.db.find_conflict(*atom, &self.atoms) {
                 self.learn
                     .extend(conflict.iter().filter(|x| !atoms.iter().any(|a| a == *x)));
                 return false;
