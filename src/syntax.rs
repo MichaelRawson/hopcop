@@ -119,9 +119,9 @@ impl fmt::Display for Disequation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Extension {
-    pub(crate) clause: Perfect<Clause>,
+    pub(crate) clause: &'static Clause,
     pub(crate) index: usize,
 }
 
@@ -175,8 +175,8 @@ impl fmt::Display for Clause {
 
 #[derive(Debug, Default)]
 pub(crate) struct Matrix {
-    pub(crate) clauses: Vec<Perfect<Clause>>,
-    pub(crate) start: Vec<Perfect<Clause>>,
+    pub(crate) clauses: Vec<&'static Clause>,
+    pub(crate) start: Vec<&'static Clause>,
     pub(crate) index: FnvHashMap<(bool, Perfect<Symbol>), Vec<Extension>>,
     pub(crate) have_conjecture: bool,
 }

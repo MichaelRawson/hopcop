@@ -77,9 +77,9 @@ impl Substitution {
         self.trail.clear();
     }
 
-    pub(crate) fn undo_to(&mut self, point: usize) {
-        assert!(point <= self.len());
-        while point < self.len() {
+    pub(crate) fn truncate(&mut self, to: usize) {
+        assert!(to <= self.len());
+        while to < self.len() {
             let next = self.trail.pop().unwrap();
             assert!(self.map.remove(&next).is_some());
         }
@@ -104,19 +104,19 @@ impl Substitution {
                 }
                 (Term::Var(x), Term::App(app)) => {
                     if !self.bind(left.transfer(x), right.transfer(app)) {
-                        self.undo_to(start);
+                        self.truncate(start);
                         return false;
                     }
                 }
                 (Term::App(t), Term::Var(x)) => {
                     if !self.bind(right.transfer(x), left.transfer(t)) {
-                        self.undo_to(start);
+                        self.truncate(start);
                         return false;
                     }
                 }
                 (Term::App(lapp), Term::App(rapp)) => {
                     if lapp.symbol != rapp.symbol {
-                        self.undo_to(start);
+                        self.truncate(start);
                         return false;
                     }
                     todo.extend(Iterator::zip(
