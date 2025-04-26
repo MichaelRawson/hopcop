@@ -40,6 +40,7 @@ pub(crate) struct Search<'matrix> {
     proof: Vec<Rule>,
     atoms: IndexSet<Atom, FnvBuildHasher>,
     learn: FnvHashSet<Atom>,
+    explain_substitution: Substitution,
     db: DB,
     depth: usize,
 }
@@ -54,6 +55,7 @@ impl<'matrix> Search<'matrix> {
             proof: vec![],
             atoms: IndexSet::default(),
             learn: FnvHashSet::default(),
+            explain_substitution: Substitution::default(),
             db: DB::default(),
             depth: 1,
         }
@@ -273,11 +275,29 @@ impl<'matrix> Search<'matrix> {
         left: Tagged<Perfect<Application>>,
         right: Tagged<Perfect<Application>>,
     ) {
-        let mut substitution = Substitution::default();
-        assert!(substitution.unify_application(left, right));
-        let mut reset = substitution.len();
-        'find_conflict: loop {
+        self.explain_substitution.clear();
+        assert!(self.explain_substitution.unify_application(left, right));
+        for atom in &self.learn {
+            let (from, to) = if let Atom::Connect(from, to) = *atom {
+                (from, to)
+            } else {
+                continue;
+            };
+            let from_node = self.tableau[from];
+            let to_node = self.tableau[to];
+            let l = Tagged::new(from_node.parent.as_usize(), from_node.literal.atom);
+            let k = Tagged::new(to_node.parent.as_usize(), to_node.literal.atom);
+            if !self.explain_substitution.unify_application(l, k) {
+                return;
+            }
+        }
+
+        'outer: loop {
+            let reset = self.explain_substitution.len();
             for atom in &self.atoms {
+                if self.learn.contains(atom) {
+                    continue;
+                }
                 let (from, to) = if let Atom::Connect(from, to) = *atom {
                     (from, to)
                 } else {
@@ -287,16 +307,15 @@ impl<'matrix> Search<'matrix> {
                 let to_node = self.tableau[to];
                 let l = Tagged::new(from_node.parent.as_usize(), from_node.literal.atom);
                 let k = Tagged::new(to_node.parent.as_usize(), to_node.literal.atom);
-                if !substitution.unify_application(l, k) {
-                    substitution.truncate(reset);
+                if !self.explain_substitution.unify_application(l, k) {
+                    self.explain_substitution.truncate(reset);
                     self.learn.insert(*atom);
                     self.learn.insert(Atom::Place(from, from_node.literal));
                     self.learn.insert(Atom::Place(to, to_node.literal));
-                    if substitution.unify_application(l, k) {
-                        reset = substitution.len();
-                        continue 'find_conflict;
+                    if self.explain_substitution.unify_application(l, k) {
+                        continue 'outer;
                     } else {
-                        break 'find_conflict;
+                        return;
                     }
                 }
             }
