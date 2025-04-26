@@ -1,6 +1,7 @@
 use fnv::{FnvBuildHasher, FnvHashSet};
 use indexmap::IndexSet;
-use std::collections::VecDeque;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::fmt;
 
 use crate::db::{Atom, DB};
@@ -34,9 +35,10 @@ impl fmt::Display for Rule {
 
 pub(crate) struct Search<'matrix> {
     matrix: &'matrix Matrix,
+    rng: SmallRng,
     tableau: Tableau,
     substitution: Substitution,
-    open: VecDeque<Location>,
+    open: Vec<Location>,
     proof: Vec<Rule>,
     atoms: IndexSet<Atom, FnvBuildHasher>,
     learn: FnvHashSet<Atom>,
@@ -49,9 +51,10 @@ impl<'matrix> Search<'matrix> {
     pub(crate) fn new(matrix: &'matrix Matrix) -> Self {
         Self {
             matrix,
+            rng: SmallRng::seed_from_u64(0),
             tableau: Tableau::default(),
             substitution: Substitution::default(),
-            open: VecDeque::default(),
+            open: vec![],
             proof: vec![],
             atoms: IndexSet::default(),
             learn: FnvHashSet::default(),
@@ -91,7 +94,18 @@ impl<'matrix> Search<'matrix> {
         */
 
         self.learn.clear();
-        if let Some(open) = self.open.pop_front() {
+        if self.open.is_empty() {
+            assert!(self.tableau.is_empty());
+            assert!(self.substitution.is_empty());
+            assert!(self.atoms.is_empty());
+            for start in &self.matrix.start {
+                if self.start(start) {
+                    return;
+                }
+            }
+        } else {
+            let index = self.rng.random_range(..self.open.len());
+            let open = self.open.swap_remove(index);
             let node = self.tableau[open];
             self.learn.insert(Atom::Place(open, node.literal));
             let mut parent = node.parent;
@@ -115,16 +129,7 @@ impl<'matrix> Search<'matrix> {
                     }
                 }
             }
-            self.open.push_front(open);
-        } else {
-            assert!(self.tableau.is_empty());
-            assert!(self.substitution.is_empty());
-            assert!(self.atoms.is_empty());
-            for start in &self.matrix.start {
-                if self.start(start) {
-                    return;
-                }
-            }
+            self.open.push(open);
         }
         // assert!(!self.learn.is_empty());
         if self.learn.is_empty() {
@@ -155,14 +160,14 @@ impl<'matrix> Search<'matrix> {
         self.atoms.clear();
     }
 
-    fn replay_rule(&mut self, rule: Rule) {
+    fn replay_rule(&mut self, rule: Rule) -> bool {
         let ok = match rule {
             Rule::Start(clause) => self.start(clause),
             Rule::Reduce(l, k) => self.tableau.contains(k) && self.reduce(l, k),
             Rule::Extend(at, extend) => self.tableau.contains(at) && self.extend(at, extend),
         };
         if !ok {
-            return;
+            return false;
         }
         match rule {
             Rule::Start(_) => {}
@@ -171,13 +176,14 @@ impl<'matrix> Search<'matrix> {
                 self.open.retain(|x| *x != at);
             }
         }
+        true
     }
 
     fn start(&mut self, start: &'static Clause) -> bool {
         for (index, literal) in start.literals.iter().copied().enumerate() {
             let location = self.tableau.locate(ROOT, index);
             self.atoms.insert(Atom::Place(location, literal));
-            self.open.push_back(location);
+            self.open.push(location);
             self.tableau.set(literal, location, ROOT, 1);
         }
         if !self.check_atoms_since(0) {
@@ -239,7 +245,7 @@ impl<'matrix> Search<'matrix> {
             if index == extension.index {
                 self.atoms.insert(Atom::Connect(open, location));
             } else {
-                self.open.push_back(location);
+                self.open.push(location);
             }
             self.tableau
                 .set(literal, location, open, self.tableau[open].depth + 1);
@@ -248,9 +254,7 @@ impl<'matrix> Search<'matrix> {
             self.substitution.truncate(restore_subst);
             self.tableau.truncate(restore_tab);
             self.atoms.truncate(restore_atom);
-            while self.open.len() > restore_open {
-                self.open.pop_back();
-            }
+            self.open.truncate(restore_open);
             return false;
         }
 
