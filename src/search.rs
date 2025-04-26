@@ -2,7 +2,6 @@ use fnv::{FnvBuildHasher, FnvHashSet};
 use indexmap::IndexSet;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use std::fmt;
 
 use crate::db::{Atom, DB};
 use crate::subst::{Substitution, Tagged};
@@ -15,22 +14,12 @@ fn could_unify(l: Literal, k: Literal) -> bool {
         && Substitution::default().unify_application(Tagged::new(0, l.atom), Tagged::new(1, k.atom))
 }
 
-enum Rule {
-    Start(&'static Clause),
-    Reduce(Location, Location),
-    Extend(Location, Extension),
-}
-
-impl fmt::Display for Rule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Rule::Start(clause) => write!(f, "s{}", clause.info.number),
-            Rule::Reduce(l, k) => write!(f, "r{}-{}", l.as_usize(), k.as_usize()),
-            Rule::Extend(l, e) => {
-                write!(f, "e{}-{}-{}", l.as_usize(), e.clause.info.number, e.index)
-            }
-        }
-    }
+#[derive(Debug, Default, Clone, Copy)]
+struct Restore {
+    tableau: usize,
+    substitution: usize,
+    atoms: usize,
+    closed: usize,
 }
 
 pub(crate) struct Search<'matrix> {
@@ -38,9 +27,10 @@ pub(crate) struct Search<'matrix> {
     rng: SmallRng,
     tableau: Tableau,
     substitution: Substitution,
-    open: Vec<Location>,
-    proof: Vec<Rule>,
     atoms: IndexSet<Atom, FnvBuildHasher>,
+    closed: Vec<Location>,
+    restore: Vec<Restore>,
+    open: Vec<Location>,
     learn: FnvHashSet<Atom>,
     explain_substitution: Substitution,
     db: DB,
@@ -48,15 +38,24 @@ pub(crate) struct Search<'matrix> {
 }
 
 impl<'matrix> Search<'matrix> {
+    fn restore(&mut self, restore: Restore) {
+        self.tableau.truncate(restore.tableau);
+        self.substitution.truncate(restore.substitution);
+        self.atoms.truncate(restore.atoms);
+        self.open.extend(self.closed.drain(restore.closed..));
+        self.open.retain(|open| self.tableau.contains(*open));
+    }
+
     pub(crate) fn new(matrix: &'matrix Matrix) -> Self {
         Self {
             matrix,
             rng: SmallRng::seed_from_u64(0),
             tableau: Tableau::default(),
             substitution: Substitution::default(),
-            open: vec![],
-            proof: vec![],
             atoms: IndexSet::default(),
+            closed: vec![],
+            restore: vec![],
+            open: vec![],
             learn: FnvHashSet::default(),
             explain_substitution: Substitution::default(),
             db: DB::default(),
@@ -65,7 +64,7 @@ impl<'matrix> Search<'matrix> {
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        !self.proof.is_empty() && self.open.is_empty()
+        !self.restore.is_empty() && self.open.is_empty()
     }
 
     pub(crate) fn graphviz(&self) {
@@ -73,18 +72,8 @@ impl<'matrix> Search<'matrix> {
     }
 
     pub(crate) fn expand_or_backtrack(&mut self) {
-        if self.is_closed() {
-            println!("% SZS status Theorem");
-            self.graphviz();
-            std::process::exit(0);
-        }
-
+        assert!(!self.is_closed());
         /*
-        eprint!("proof:");
-        for rule in &self.proof {
-            eprint!(" {}", rule);
-        }
-        eprintln!();
         eprint!("atoms:");
         for atom in &self.atoms {
             eprint!(" {}", atom);
@@ -94,10 +83,19 @@ impl<'matrix> Search<'matrix> {
         */
 
         self.learn.clear();
+        self.restore.push(Restore {
+            tableau: self.tableau.len(),
+            substitution: self.substitution.len(),
+            atoms: self.atoms.len(),
+            closed: self.closed.len(),
+        });
+
         if self.open.is_empty() {
             assert!(self.tableau.is_empty());
             assert!(self.substitution.is_empty());
             assert!(self.atoms.is_empty());
+            assert!(self.closed.is_empty());
+
             for start in &self.matrix.start {
                 if self.start(start) {
                     return;
@@ -131,7 +129,8 @@ impl<'matrix> Search<'matrix> {
             }
             self.open.push(open);
         }
-        // assert!(!self.learn.is_empty());
+        self.restore.pop();
+
         if self.learn.is_empty() {
             self.db = DB::default();
             self.depth += 1;
@@ -145,38 +144,22 @@ impl<'matrix> Search<'matrix> {
         }
         eprintln!();
         */
-        let proof = std::mem::take(&mut self.proof);
-        self.begin_replay();
+
+        let conflict_position = self
+            .atoms
+            .iter()
+            .rposition(|atom| self.learn.contains(atom))
+            .expect("live atoms do not contain learned clause");
+        let restore_position = self
+            .restore
+            .iter()
+            .rposition(|restore| restore.atoms <= conflict_position)
+            .unwrap_or_default();
+
+        let restore = self.restore[restore_position];
+        self.restore.truncate(restore_position);
+        self.restore(restore);
         self.db.insert(self.learn.drain().collect(), &self.atoms);
-        for rule in proof {
-            self.replay_rule(rule);
-        }
-    }
-
-    fn begin_replay(&mut self) {
-        self.tableau.clear();
-        self.substitution.clear();
-        self.open.clear();
-        self.atoms.clear();
-    }
-
-    fn replay_rule(&mut self, rule: Rule) -> bool {
-        let ok = match rule {
-            Rule::Start(clause) => self.start(clause),
-            Rule::Reduce(l, k) => self.tableau.contains(k) && self.reduce(l, k),
-            Rule::Extend(at, extend) => self.tableau.contains(at) && self.extend(at, extend),
-        };
-        if !ok {
-            return false;
-        }
-        match rule {
-            Rule::Start(_) => {}
-            Rule::Reduce(_, at) | Rule::Extend(at, _) => {
-                // TODO avoid this linear-time scan
-                self.open.retain(|x| *x != at);
-            }
-        }
-        true
     }
 
     fn start(&mut self, start: &'static Clause) -> bool {
@@ -192,7 +175,6 @@ impl<'matrix> Search<'matrix> {
             self.open.clear();
             return false;
         }
-        self.proof.push(Rule::Start(start));
         true
     }
 
@@ -217,7 +199,8 @@ impl<'matrix> Search<'matrix> {
             self.atoms.pop();
             return false;
         }
-        self.proof.push(Rule::Reduce(parent, open));
+
+        self.closed.push(open);
         true
     }
 
@@ -258,7 +241,7 @@ impl<'matrix> Search<'matrix> {
             return false;
         }
 
-        self.proof.push(Rule::Extend(open, extension));
+        self.closed.push(open);
         true
     }
 

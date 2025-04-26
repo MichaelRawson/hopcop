@@ -26,6 +26,7 @@ pub(crate) struct Node {
     pub(crate) parent: Location,
     pub(crate) depth: usize,
     pub(crate) literal: Literal,
+    open: bool,
 }
 
 #[derive(Default)]
@@ -78,6 +79,7 @@ impl Tableau {
             parent,
             depth,
             literal,
+            open: true,
         };
         self.nodes.insert(location, node);
     }

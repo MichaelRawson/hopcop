@@ -44,9 +44,15 @@ fn start(options: &Options) {
     }
 
     let mut search = Search::new(&matrix);
-    loop {
+    while !search.is_closed() {
         search.expand_or_backtrack();
     }
+
+    let stdout = stdout();
+    let mut lock = stdout.lock();
+    tstp::theorem(&mut lock, options)
+        .context("printing success")
+        .unwrap_or_else(report_err);
     search.graphviz();
     std::process::exit(0);
 }

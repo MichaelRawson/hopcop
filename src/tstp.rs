@@ -20,6 +20,12 @@ pub(crate) fn load_error(error: &anyhow::Error) {
     }
 }
 
+pub(crate) fn theorem<W: Write>(w: &mut W, options: &Options) -> anyhow::Result<()> {
+    let name = get_problem_name(options);
+    writeln!(w, "% SZS status Theorem for {}", name)?;
+    Ok(())
+}
+
 pub(crate) fn gaveup<W: Write>(w: &mut W, options: &Options) -> anyhow::Result<()> {
     let name = get_problem_name(options);
     writeln!(w, "% SZS status GaveUp for {}", name)?;
