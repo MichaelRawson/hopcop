@@ -10,6 +10,7 @@ use crate::syntax::Literal;
 pub(crate) enum Atom {
     Place(Location, Literal),
     Connect(Location, Location),
+    CannotConnect(Location, Location),
 }
 
 impl fmt::Display for Atom {
@@ -17,6 +18,7 @@ impl fmt::Display for Atom {
         match self {
             Atom::Place(location, literal) => write!(f, "{}@{}", literal, location),
             Atom::Connect(l, k) => write!(f, "{}~{}", l, k),
+            Atom::CannotConnect(l, k) => write!(f, "{}≁{}", l, k),
         }
     }
 }

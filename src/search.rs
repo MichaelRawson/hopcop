@@ -97,14 +97,8 @@ impl<'matrix> Search<'matrix> {
             }
             self.open.push(open);
 
-            // add path to learned clause
-            // TODO don't?
-            let mut path = open;
-            while path != ROOT {
-                let node = self.tableau[path];
-                self.learn.insert(Atom::Place(path, node.literal));
-                path = node.parent;
-            }
+            // add literal itself to learned clause
+            self.learn.insert(Atom::Place(open, self.tableau[open].literal));
         }
         self.restore.pop();
 
@@ -156,8 +150,7 @@ impl<'matrix> Search<'matrix> {
         assert!(self.open.is_empty());
 
         for (index, literal) in start.literals.iter().copied().enumerate() {
-            let location = self.tableau.add_child(ROOT, literal, index);
-            self.atoms.insert(Atom::Place(location, literal));
+            let location = self.add_child(ROOT, literal, index);
             self.open.push(location);
         }
         if !self.check_atoms_since(0) {
@@ -198,21 +191,24 @@ impl<'matrix> Search<'matrix> {
         let parent_node = self.tableau[parent];
         let open_node = self.tableau[open];
         if !self.could_unify(parent_node.literal, open_node.literal) {
+            self.learn.insert(Atom::CannotConnect(parent, open));
             return false;
         }
 
         let restore_subst = self.substitution.len();
         let left = parent_node.parent.locate(parent_node.literal);
         let right = open_node.parent.locate(open_node.literal);
-        if !self.substitution.unify_literal(left, right) {
+        if !self.substitution.connect(left, right) {
+            self.learn.insert(Atom::Place(parent, parent_node.literal));
             self.explain_unification_failure(left, right);
             return false;
         }
 
+        let restore_atoms = self.atoms.len();
         self.atoms.insert(Atom::Connect(parent, open));
-        if !self.check_atoms_since(self.atoms.len() - 1) {
+        if !self.check_atoms_since(restore_atoms) {
             self.substitution.truncate(restore_subst);
-            self.atoms.pop();
+            self.atoms.truncate(restore_atoms);
             return false;
         }
         true
@@ -228,7 +224,7 @@ impl<'matrix> Search<'matrix> {
         let restore_subst = self.substitution.len();
         let l = open_node.parent.locate(open_node.literal);
         let k = open.locate(el);
-        if !self.substitution.unify_literal(l, k) {
+        if !self.substitution.connect(l, k) {
             self.explain_unification_failure(l, k);
             return false;
         }
@@ -237,8 +233,7 @@ impl<'matrix> Search<'matrix> {
         let restore_atoms = self.atoms.len();
         let restore_open = self.open.len();
         for (index, literal) in extension.clause.literals.iter().copied().enumerate() {
-            let location = self.tableau.add_child(open, literal, index);
-            self.atoms.insert(Atom::Place(location, literal));
+            let location = self.add_child(open, literal, index);
             if index == extension.index {
                 self.atoms.insert(Atom::Connect(open, location));
             } else {
@@ -269,12 +264,26 @@ impl<'matrix> Search<'matrix> {
 
     fn could_unify(&mut self, l: Literal, k: Literal) -> bool {
         self.scratch.clear();
-        l.polarity != k.polarity && self.scratch.unify_literal(BANK1.locate(l), BANK2.locate(k))
+        l.polarity != k.polarity && self.scratch.connect(BANK1.locate(l), BANK2.locate(k))
+    }
+
+    fn add_child(&mut self, open: Location, literal: Literal, index: usize) -> Location {
+        let location = self.tableau.add_child(open, literal, index);
+        self.atoms.insert(Atom::Place(location, literal));
+        let mut ancestor = open;
+        while ancestor != ROOT {
+            let node = self.tableau[ancestor];
+            if !self.could_unify(node.literal, literal) {
+                self.atoms.insert(Atom::CannotConnect(ancestor, location));
+            }
+            ancestor = node.parent;
+        }
+        location
     }
 
     fn explain_unification_failure(&mut self, l: Located<Literal>, k: Located<Literal>) {
         self.scratch.clear();
-        assert!(self.scratch.unify_literal(l, k));
+        assert!(self.scratch.connect(l, k));
         for atom in &self.learn {
             let (from, to) = if let Atom::Connect(from, to) = *atom {
                 (from, to)
@@ -285,7 +294,7 @@ impl<'matrix> Search<'matrix> {
             let to_node = self.tableau[to];
             let l = from_node.parent.locate(from_node.literal);
             let k = to_node.parent.locate(to_node.literal);
-            if !self.scratch.unify_literal(l, k) {
+            if !self.scratch.connect(l, k) {
                 return;
             }
         }
@@ -305,12 +314,12 @@ impl<'matrix> Search<'matrix> {
                 let to_node = self.tableau[to];
                 let l = from_node.parent.locate(from_node.literal);
                 let k = to_node.parent.locate(to_node.literal);
-                if !self.scratch.unify_literal(l, k) {
+                if !self.scratch.connect(l, k) {
                     self.scratch.truncate(reset);
                     self.learn.insert(*atom);
                     self.learn.insert(Atom::Place(from, from_node.literal));
                     self.learn.insert(Atom::Place(to, to_node.literal));
-                    if self.scratch.unify_literal(l, k) {
+                    if self.scratch.connect(l, k) {
                         continue 'outer;
                     } else {
                         return;

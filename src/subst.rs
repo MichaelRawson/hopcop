@@ -148,7 +148,7 @@ impl Substitution {
         true
     }
 
-    pub(crate) fn unify_literal(&mut self, l: Located<Literal>, k: Located<Literal>) -> bool {
+    pub(crate) fn connect(&mut self, l: Located<Literal>, k: Located<Literal>) -> bool {
         assert_ne!(l.item.polarity, k.item.polarity);
         self.unify(l.map(|l| Term::App(l.atom)), k.map(|r| Term::App(r.atom)))
     }
