@@ -1,4 +1,4 @@
-use crate::subst::Substitution;
+use crate::subst::{BANK1, Substitution};
 use crate::syntax::*;
 use crate::util::Perfect;
 use fnv::FnvHashSet;
@@ -69,10 +69,10 @@ impl Builder {
                         right: Term::App(k.atom),
                     };
                     self.subst.clear();
-                    if self
-                        .subst
-                        .unify(disequation.left.into(), disequation.right.into())
-                    {
+                    if self.subst.unify(
+                        BANK1.locate(disequation.left),
+                        BANK1.locate(disequation.right),
+                    ) {
                         disequations.push(disequation)
                     }
                 }

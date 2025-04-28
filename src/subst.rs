@@ -1,42 +1,60 @@
 use std::fmt;
 
-use crate::syntax::{Application, Term};
+use crate::syntax::{Application, Literal, Term};
 use crate::util::Perfect;
 use fnv::FnvHashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Tagged<T> {
-    offset: usize,
+pub(crate) struct Location(usize);
+
+impl Location {
+    pub(crate) fn new(index: usize) -> Self {
+        Self(index)
+    }
+}
+
+pub(crate) const ROOT: Location = Location(0);
+pub(crate) const BANK1: Location = Location(1);
+pub(crate) const BANK2: Location = Location(2);
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "l{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct Located<T> {
+    location: Location,
     item: T,
 }
 
-impl<T> From<T> for Tagged<T> {
-    fn from(item: T) -> Self {
-        Self { offset: 0, item }
+impl Location {
+    pub(crate) fn locate<T>(self, item: T) -> Located<T> {
+        Located {
+            location: self,
+            item,
+        }
     }
 }
 
-impl<T: fmt::Display> fmt::Display for Tagged<T> {
+impl<T: fmt::Display> fmt::Display for Located<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.item, self.offset)
+        write!(f, "{}/{}", self.item, self.location)
     }
 }
 
-impl<T> Tagged<T> {
-    pub(crate) fn new(offset: usize, item: T) -> Self {
-        Self { offset, item }
-    }
-
-    fn transfer<S>(&self, item: S) -> Tagged<S> {
-        Tagged {
-            offset: self.offset,
+impl<T> Located<T> {
+    fn transfer<S>(&self, item: S) -> Located<S> {
+        Located {
+            location: self.location,
             item,
         }
     }
 
-    fn map<S, F: FnOnce(T) -> S>(self, f: F) -> Tagged<S> {
-        Tagged {
-            offset: self.offset,
+    fn map<S, F: FnOnce(T) -> S>(self, f: F) -> Located<S> {
+        Located {
+            location: self.location,
             item: f(self.item),
         }
     }
@@ -44,8 +62,8 @@ impl<T> Tagged<T> {
 
 #[derive(Default, Debug)]
 pub(crate) struct Substitution {
-    map: FnvHashMap<Tagged<usize>, Tagged<Term>>,
-    trail: Vec<Tagged<usize>>,
+    map: FnvHashMap<Located<usize>, Located<Term>>,
+    trail: Vec<Located<usize>>,
 }
 
 impl fmt::Display for Substitution {
@@ -85,7 +103,7 @@ impl Substitution {
         }
     }
 
-    pub(crate) fn unify(&mut self, left: Tagged<Term>, right: Tagged<Term>) -> bool {
+    pub(crate) fn unify(&mut self, left: Located<Term>, right: Located<Term>) -> bool {
         let start = self.trail.len();
         let mut todo = vec![];
         let mut next = Some((left, right));
@@ -130,15 +148,12 @@ impl Substitution {
         true
     }
 
-    pub(crate) fn unify_application(
-        &mut self,
-        left: Tagged<Perfect<Application>>,
-        right: Tagged<Perfect<Application>>,
-    ) -> bool {
-        self.unify(left.map(Term::App), right.map(Term::App))
+    pub(crate) fn unify_literal(&mut self, l: Located<Literal>, k: Located<Literal>) -> bool {
+        assert_ne!(l.item.polarity, k.item.polarity);
+        self.unify(l.map(|l| Term::App(l.atom)), k.map(|r| Term::App(r.atom)))
     }
 
-    fn bind(&mut self, x: Tagged<usize>, t: Tagged<Perfect<Application>>) -> bool {
+    fn bind(&mut self, x: Located<usize>, t: Located<Perfect<Application>>) -> bool {
         let mut todo: Vec<_> = t.item.args.iter().map(|arg| t.transfer(*arg)).collect();
         while let Some(next) = todo.pop() {
             let next = self.lookup(next);
@@ -158,7 +173,7 @@ impl Substitution {
         true
     }
 
-    fn lookup(&self, mut term: Tagged<Term>) -> Tagged<Term> {
+    fn lookup(&self, mut term: Located<Term>) -> Located<Term> {
         while let Term::Var(x) = term.item {
             if let Some(bound) = self.map.get(&term.transfer(x)) {
                 term = *bound;

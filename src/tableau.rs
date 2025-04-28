@@ -1,32 +1,14 @@
 use fnv::{FnvBuildHasher, FnvHashMap};
 use indexmap::IndexMap;
-use std::fmt;
 
+use crate::subst::{Location, ROOT};
 use crate::syntax::Literal;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Location(usize);
-
-impl Location {
-    pub(crate) fn as_usize(self) -> usize {
-        self.0
-    }
-}
-
-pub(crate) const ROOT: Location = Location(0);
-
-impl fmt::Display for Location {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "l{}", self.0)
-    }
-}
 
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
     pub(crate) parent: Location,
     pub(crate) depth: usize,
     pub(crate) literal: Literal,
-    open: bool,
 }
 
 #[derive(Default)]
@@ -64,24 +46,31 @@ impl Tableau {
     }
 
     pub(crate) fn locate(&mut self, parent: Location, child: usize) -> Location {
-        let next = Location(self.map.len() + 1);
+        let next = Location::new(self.map.len() + 1);
         *self.map.entry((parent, child)).or_insert(next)
     }
 
-    pub(crate) fn set(
+    pub(crate) fn add_child(
         &mut self,
-        literal: Literal,
-        location: Location,
         parent: Location,
-        depth: usize,
-    ) {
-        let node = Node {
-            parent,
-            depth,
-            literal,
-            open: true,
+        literal: Literal,
+        index: usize,
+    ) -> Location {
+        let depth = if parent == ROOT {
+            1
+        } else {
+            self[parent].depth + 1
         };
-        self.nodes.insert(location, node);
+        let child = self.locate(parent, index);
+        self.nodes.insert(
+            child,
+            Node {
+                parent,
+                depth,
+                literal,
+            },
+        );
+        child
     }
 
     pub(crate) fn graphviz(&self) {
