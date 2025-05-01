@@ -1,8 +1,9 @@
+use fnv::FnvBuildHasher;
+use indexmap::IndexMap;
 use std::fmt;
 
 use crate::syntax::{Application, Literal, Term};
 use crate::util::Perfect;
-use fnv::FnvHashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Location(usize);
@@ -25,8 +26,8 @@ impl fmt::Display for Location {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Located<T> {
-    location: Location,
-    item: T,
+    pub(crate) location: Location,
+    pub(crate) item: T,
 }
 
 impl Location {
@@ -62,19 +63,18 @@ impl<T> Located<T> {
 
 #[derive(Default, Debug)]
 pub(crate) struct Substitution {
-    map: FnvHashMap<Located<usize>, Located<Term>>,
-    trail: Vec<Located<usize>>,
+    map: IndexMap<Located<usize>, Located<Term>, FnvBuildHasher>,
 }
 
 impl fmt::Display for Substitution {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{{")?;
         let mut first = true;
-        for x in &self.trail {
+        for (x, t) in &self.map {
             if !first {
                 write!(f, ", ")?;
             }
-            write!(f, "{} -> {}", x, self.map[x])?;
+            write!(f, "{} -> {}", x, t)?;
             first = false;
         }
         write!(f, "}}")
@@ -87,24 +87,19 @@ impl Substitution {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.trail.len()
+        self.map.len()
     }
 
     pub(crate) fn clear(&mut self) {
         self.map.clear();
-        self.trail.clear();
     }
 
     pub(crate) fn truncate(&mut self, to: usize) {
-        assert!(to <= self.len());
-        while to < self.len() {
-            let next = self.trail.pop().unwrap();
-            assert!(self.map.remove(&next).is_some());
-        }
+        self.map.truncate(to);
     }
 
     pub(crate) fn unify(&mut self, left: Located<Term>, right: Located<Term>) -> bool {
-        let start = self.trail.len();
+        let start = self.map.len();
         let mut todo = vec![];
         let mut next = Some((left, right));
         while let Some((left, right)) = next {
@@ -118,7 +113,6 @@ impl Substitution {
                 (Term::Var(x), Term::Var(_)) => {
                     let left = left.transfer(x);
                     self.map.insert(left, right);
-                    self.trail.push(left);
                 }
                 (Term::Var(x), Term::App(app)) => {
                     if !self.bind(left.transfer(x), right.transfer(app)) {
@@ -169,7 +163,6 @@ impl Substitution {
             }
         }
         self.map.insert(x, t.map(Term::App));
-        self.trail.push(x);
         true
     }
 

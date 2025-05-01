@@ -98,7 +98,8 @@ impl<'matrix> Search<'matrix> {
             self.open.push(open);
 
             // add literal itself to learned clause
-            self.learn.insert(Atom::Place(open, self.tableau[open].literal));
+            self.learn
+                .insert(Atom::Place(open, self.tableau[open].literal));
         }
         self.restore.pop();
 
@@ -150,7 +151,7 @@ impl<'matrix> Search<'matrix> {
         assert!(self.open.is_empty());
 
         for (index, literal) in start.literals.iter().copied().enumerate() {
-            let location = self.add_child(ROOT, literal, index);
+            let location = self.add_child(ROOT, literal, index, false);
             self.open.push(location);
         }
         if !self.check_atoms_since(0) {
@@ -190,8 +191,8 @@ impl<'matrix> Search<'matrix> {
     fn reduce(&mut self, parent: Location, open: Location) -> bool {
         let parent_node = self.tableau[parent];
         let open_node = self.tableau[open];
-        if !self.could_unify(parent_node.literal, open_node.literal) {
-            self.learn.insert(Atom::CannotConnect(parent, open));
+        if self.atoms.contains(&Atom::CannotReduce(parent, open)) {
+            self.learn.insert(Atom::CannotReduce(parent, open));
             return false;
         }
 
@@ -217,7 +218,7 @@ impl<'matrix> Search<'matrix> {
     fn extend(&mut self, open: Location, extension: Extension) -> bool {
         let open_node = self.tableau[open];
         let el = extension.clause.literals[extension.index];
-        if !self.could_unify(open_node.literal, el) {
+        if !self.could_unify(BANK1.locate(open_node.literal), BANK2.locate(el)) {
             return false;
         }
 
@@ -233,7 +234,7 @@ impl<'matrix> Search<'matrix> {
         let restore_atoms = self.atoms.len();
         let restore_open = self.open.len();
         for (index, literal) in extension.clause.literals.iter().copied().enumerate() {
-            let location = self.add_child(open, literal, index);
+            let location = self.add_child(open, literal, index, index != extension.index);
             if index == extension.index {
                 self.atoms.insert(Atom::Connect(open, location));
             } else {
@@ -262,19 +263,29 @@ impl<'matrix> Search<'matrix> {
         true
     }
 
-    fn could_unify(&mut self, l: Literal, k: Literal) -> bool {
+    fn could_unify(&mut self, l: Located<Literal>, k: Located<Literal>) -> bool {
         self.scratch.clear();
-        l.polarity != k.polarity && self.scratch.connect(BANK1.locate(l), BANK2.locate(k))
+        l.item.polarity != k.item.polarity && self.scratch.connect(l, k)
     }
 
-    fn add_child(&mut self, open: Location, literal: Literal, index: usize) -> Location {
+    fn add_child(
+        &mut self,
+        open: Location,
+        literal: Literal,
+        index: usize,
+        try_unify: bool,
+    ) -> Location {
         let location = self.tableau.add_child(open, literal, index);
         self.atoms.insert(Atom::Place(location, literal));
+        if !try_unify {
+            return location;
+        }
+
         let mut ancestor = open;
         while ancestor != ROOT {
             let node = self.tableau[ancestor];
-            if !self.could_unify(node.literal, literal) {
-                self.atoms.insert(Atom::CannotConnect(ancestor, location));
+            if !self.could_unify(node.parent.locate(node.literal), open.locate(literal)) {
+                self.atoms.insert(Atom::CannotReduce(ancestor, location));
             }
             ancestor = node.parent;
         }
