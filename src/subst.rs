@@ -15,8 +15,6 @@ impl Location {
 }
 
 pub(crate) const ROOT: Location = Location(0);
-pub(crate) const BANK1: Location = Location(1);
-pub(crate) const BANK2: Location = Location(2);
 
 impl fmt::Display for Location {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -53,7 +51,7 @@ impl<T> Located<T> {
         }
     }
 
-    fn map<S, F: FnOnce(T) -> S>(self, f: F) -> Located<S> {
+    pub(crate) fn map<S, F: FnOnce(T) -> S>(self, f: F) -> Located<S> {
         Located {
             location: self.location,
             item: f(self.item),
@@ -175,5 +173,16 @@ impl Substitution {
             }
         }
         term
+    }
+
+    pub(crate) fn bindings(&self) -> impl Iterator<Item = (&Located<usize>, &Located<Term>)> {
+        self.bindings_since(0)
+    }
+
+    pub(crate) fn bindings_since(
+        &self,
+        since: usize,
+    ) -> impl Iterator<Item = (&Located<usize>, &Located<Term>)> {
+        self.map[since..].iter()
     }
 }

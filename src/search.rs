@@ -4,8 +4,8 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::db::{Atom, DB};
-use crate::subst::{BANK1, BANK2, Located, Location, ROOT, Substitution};
-use crate::syntax::{Clause, Extension, Literal, Matrix};
+use crate::subst::{Located, Location, ROOT, Substitution};
+use crate::syntax::{Clause, Extension, Literal, Matrix, Term};
 use crate::tableau::Tableau;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -29,6 +29,7 @@ pub(crate) struct Search<'matrix> {
     db: DB,
     depth: usize,
     scratch: Substitution,
+    steps: usize,
 }
 
 impl<'matrix> Search<'matrix> {
@@ -54,6 +55,7 @@ impl<'matrix> Search<'matrix> {
             db: DB::default(),
             depth: 1,
             scratch: Substitution::default(),
+            steps: 0,
         }
     }
 
@@ -66,6 +68,7 @@ impl<'matrix> Search<'matrix> {
     }
 
     pub(crate) fn expand_or_backtrack(&mut self) {
+        self.steps += 1;
         assert!(!self.is_closed());
         /*
         eprint!("atoms:");
@@ -191,22 +194,23 @@ impl<'matrix> Search<'matrix> {
     fn reduce(&mut self, parent: Location, open: Location) -> bool {
         let parent_node = self.tableau[parent];
         let open_node = self.tableau[open];
-        if self.atoms.contains(&Atom::CannotReduce(parent, open)) {
+        let l = parent_node.parent.locate(parent_node.literal);
+        let k = open_node.parent.locate(open_node.literal);
+        if !self.could_unify(l, k) {
             self.learn.insert(Atom::CannotReduce(parent, open));
             return false;
         }
 
         let restore_subst = self.substitution.len();
-        let left = parent_node.parent.locate(parent_node.literal);
-        let right = open_node.parent.locate(open_node.literal);
-        if !self.substitution.connect(left, right) {
+        if !self.substitution.connect(l, k) {
             self.learn.insert(Atom::Place(parent, parent_node.literal));
-            self.explain_unification_failure(left, right);
+            self.explain_unification_failure(l, k);
             return false;
         }
 
         let restore_atoms = self.atoms.len();
-        self.atoms.insert(Atom::Connect(parent, open));
+        self.atoms
+            .extend(self.scratch.bindings().map(|(x, t)| Atom::Bind(*x, *t)));
         if !self.check_atoms_since(restore_atoms) {
             self.substitution.truncate(restore_subst);
             self.atoms.truncate(restore_atoms);
@@ -218,13 +222,13 @@ impl<'matrix> Search<'matrix> {
     fn extend(&mut self, open: Location, extension: Extension) -> bool {
         let open_node = self.tableau[open];
         let el = extension.clause.literals[extension.index];
-        if !self.could_unify(BANK1.locate(open_node.literal), BANK2.locate(el)) {
+        let l = open_node.parent.locate(open_node.literal);
+        let k = open.locate(el);
+        if !self.could_unify(l, k) {
             return false;
         }
 
         let restore_subst = self.substitution.len();
-        let l = open_node.parent.locate(open_node.literal);
-        let k = open.locate(el);
         if !self.substitution.connect(l, k) {
             self.explain_unification_failure(l, k);
             return false;
@@ -233,11 +237,11 @@ impl<'matrix> Search<'matrix> {
         let restore_tableau = self.tableau.len();
         let restore_atoms = self.atoms.len();
         let restore_open = self.open.len();
+        self.atoms
+            .extend(self.scratch.bindings().map(|(x, t)| Atom::Bind(*x, *t)));
         for (index, literal) in extension.clause.literals.iter().copied().enumerate() {
             let location = self.add_child(open, literal, index, index != extension.index);
-            if index == extension.index {
-                self.atoms.insert(Atom::Connect(open, location));
-            } else {
+            if index != extension.index {
                 self.open.push(location);
             }
         }
@@ -296,17 +300,10 @@ impl<'matrix> Search<'matrix> {
         self.scratch.clear();
         assert!(self.scratch.connect(l, k));
         for atom in &self.learn {
-            let (from, to) = if let Atom::Connect(from, to) = *atom {
-                (from, to)
-            } else {
-                continue;
-            };
-            let from_node = self.tableau[from];
-            let to_node = self.tableau[to];
-            let l = from_node.parent.locate(from_node.literal);
-            let k = to_node.parent.locate(to_node.literal);
-            if !self.scratch.connect(l, k) {
-                return;
+            if let Atom::Bind(x, t) = *atom {
+                if !self.scratch.unify(x.map(Term::Var), t) {
+                    return;
+                }
             }
         }
 
@@ -316,25 +313,20 @@ impl<'matrix> Search<'matrix> {
                 if self.learn.contains(atom) {
                     continue;
                 }
-                let (from, to) = if let Atom::Connect(from, to) = *atom {
-                    (from, to)
+                let (x, t) = if let Atom::Bind(x, t) = *atom {
+                    (x, t)
                 } else {
                     continue;
                 };
-                let from_node = self.tableau[from];
-                let to_node = self.tableau[to];
-                let l = from_node.parent.locate(from_node.literal);
-                let k = to_node.parent.locate(to_node.literal);
-                if !self.scratch.connect(l, k) {
-                    self.scratch.truncate(reset);
-                    self.learn.insert(*atom);
-                    self.learn.insert(Atom::Place(from, from_node.literal));
-                    self.learn.insert(Atom::Place(to, to_node.literal));
-                    if self.scratch.connect(l, k) {
-                        continue 'outer;
-                    } else {
-                        return;
-                    }
+                if self.scratch.unify(x.map(Term::Var), t) {
+                    continue;
+                }
+                self.scratch.truncate(reset);
+                self.learn.insert(*atom);
+                if self.scratch.unify(x.map(Term::Var), t) {
+                    continue 'outer;
+                } else {
+                    return;
                 }
             }
             unreachable!()

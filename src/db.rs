@@ -3,13 +3,13 @@ use indexmap::IndexSet;
 use std::fmt;
 use std::hash::Hash;
 
-use crate::subst::Location;
-use crate::syntax::Literal;
+use crate::subst::{Located, Location};
+use crate::syntax::{Literal, Term};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Atom {
     Place(Location, Literal),
-    Connect(Location, Location),
+    Bind(Located<usize>, Located<Term>),
     CannotReduce(Location, Location),
 }
 
@@ -17,7 +17,7 @@ impl fmt::Display for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Atom::Place(location, literal) => write!(f, "{}@{}", literal, location),
-            Atom::Connect(l, k) => write!(f, "{}~{}", l, k),
+            Atom::Bind(l, k) => write!(f, "{}->{}", l, k),
             Atom::CannotReduce(l, k) => write!(f, "{}≁{}", l, k),
         }
     }
