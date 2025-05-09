@@ -107,7 +107,7 @@ impl fmt::Display for Literal {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct Disequation {
     pub(crate) left: Term,
     pub(crate) right: Term,

@@ -145,6 +145,32 @@ impl Substitution {
         self.unify(l.map(|l| Term::App(l.atom)), k.map(|r| Term::App(r.atom)))
     }
 
+    pub(crate) fn equal(&self, left: Located<Term>, right: Located<Term>) -> bool {
+        let mut todo = vec![];
+        let mut next = Some((left, right));
+        while let Some((left, right)) = next {
+            let left = self.lookup(left);
+            let right = self.lookup(right);
+            if left == right {
+                next = todo.pop();
+                continue;
+            }
+            if let (Term::App(lapp), Term::App(rapp)) = (left.item, right.item) {
+                if lapp.symbol != rapp.symbol {
+                    return false;
+                }
+                todo.extend(Iterator::zip(
+                    lapp.args.iter().map(|arg| left.transfer(*arg)),
+                    rapp.args.iter().map(|arg| right.transfer(*arg)),
+                ));
+            } else {
+                return false;
+            }
+            next = todo.pop();
+        }
+        true
+    }
+
     fn bind(&mut self, x: Located<usize>, t: Located<Perfect<Application>>) -> bool {
         let mut todo: Vec<_> = t.item.args.iter().map(|arg| t.transfer(*arg)).collect();
         while let Some(next) = todo.pop() {

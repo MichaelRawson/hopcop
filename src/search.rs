@@ -29,7 +29,6 @@ pub(crate) struct Search<'matrix> {
     db: DB,
     depth: usize,
     scratch: Substitution,
-    steps: usize,
 }
 
 impl<'matrix> Search<'matrix> {
@@ -55,7 +54,6 @@ impl<'matrix> Search<'matrix> {
             db: DB::default(),
             depth: 1,
             scratch: Substitution::default(),
-            steps: 0,
         }
     }
 
@@ -68,7 +66,6 @@ impl<'matrix> Search<'matrix> {
     }
 
     pub(crate) fn expand_or_backtrack(&mut self) {
-        self.steps += 1;
         assert!(!self.is_closed());
         /*
         eprint!("atoms:");
@@ -76,7 +73,7 @@ impl<'matrix> Search<'matrix> {
             eprint!(" {}", atom);
         }
         eprintln!();
-        eprintln!("substitution: {}", self.substitution);
+        //eprintln!("substitution: {}", self.substitution);
         */
 
         self.learn.clear();
@@ -157,6 +154,12 @@ impl<'matrix> Search<'matrix> {
             let location = self.add_child(ROOT, literal, index, false);
             self.open.push(location);
         }
+        self.atoms.extend(
+            start
+                .disequations
+                .iter()
+                .map(|d| Atom::Disequation(ROOT.locate(d.left), ROOT.locate(d.right))),
+        );
         if !self.check_atoms_since(0) {
             self.tableau.clear();
             self.atoms.clear();
@@ -171,12 +174,28 @@ impl<'matrix> Search<'matrix> {
         let mut ancestor = node.parent;
         while ancestor != ROOT {
             let member = self.tableau[ancestor];
-            let grandparent = member.parent;
             if self.reduce(ancestor, open) {
                 return true;
             }
-            ancestor = grandparent;
+            ancestor = member.parent;
         }
+
+        // regularity
+        let restore_atoms = self.atoms.len();
+        let mut ancestor = node.parent;
+        let k = node.parent.locate(Term::App(node.literal.atom));
+        while ancestor != ROOT {
+            let member = self.tableau[ancestor];
+            let l = member.parent.locate(Term::App(member.literal.atom));
+            if member.literal.polarity == node.literal.polarity {
+                self.scratch.clear();
+                if self.scratch.unify(l, k) {
+                    self.atoms.insert(Atom::Disequation(l, k));
+                }
+            }
+            ancestor = member.parent;
+        }
+        // TODO check regularity ahead of time?
 
         let Literal { polarity, atom } = node.literal;
         if node.depth == self.depth {
@@ -188,6 +207,12 @@ impl<'matrix> Search<'matrix> {
                 }
             }
         }
+
+        // remove regularity disequations from learned clause on failure
+        for atom in self.atoms.drain(restore_atoms..) {
+            self.learn.remove(&atom);
+        }
+
         false
     }
 
@@ -204,16 +229,17 @@ impl<'matrix> Search<'matrix> {
         let restore_subst = self.substitution.len();
         if !self.substitution.connect(l, k) {
             self.learn.insert(Atom::Place(parent, parent_node.literal));
-            self.explain_unification_failure(l, k);
+            self.explain_connection_failure(l, k);
             return false;
         }
-
         let restore_atoms = self.atoms.len();
         self.atoms
             .extend(self.scratch.bindings().map(|(x, t)| Atom::Bind(*x, *t)));
         if !self.check_atoms_since(restore_atoms) {
             self.substitution.truncate(restore_subst);
-            self.atoms.truncate(restore_atoms);
+            for atom in self.atoms.drain(restore_atoms..) {
+                self.learn.remove(&atom);
+            }
             return false;
         }
         true
@@ -230,7 +256,7 @@ impl<'matrix> Search<'matrix> {
 
         let restore_subst = self.substitution.len();
         if !self.substitution.connect(l, k) {
-            self.explain_unification_failure(l, k);
+            self.explain_connection_failure(l, k);
             return false;
         }
 
@@ -245,22 +271,43 @@ impl<'matrix> Search<'matrix> {
                 self.open.push(location);
             }
         }
+        self.atoms.extend(
+            extension
+                .clause
+                .disequations
+                .iter()
+                .map(|d| Atom::Disequation(open.locate(d.left), open.locate(d.right))),
+        );
         if !self.check_atoms_since(restore_atoms) {
             self.substitution.truncate(restore_subst);
             self.tableau.truncate(restore_tableau);
-            self.atoms.truncate(restore_atoms);
+            for atom in self.atoms.drain(restore_atoms..) {
+                self.learn.remove(&atom);
+            }
             self.open.truncate(restore_open);
             return false;
         }
         true
     }
 
+    // TODO better name
     fn check_atoms_since(&mut self, after: usize) -> bool {
         let atoms = &self.atoms[after..];
         for atom in atoms {
             if let Some(conflict) = self.db.find_conflict(*atom, &self.atoms) {
                 self.learn
                     .extend(conflict.iter().filter(|x| !atoms.iter().any(|a| a == *x)));
+                return false;
+            }
+        }
+        for atom in &self.atoms {
+            let (left, right) = if let Atom::Disequation(left, right) = atom {
+                (*left, *right)
+            } else {
+                continue;
+            };
+            if self.substitution.equal(left, right) {
+                self.explain_equal(left, right);
                 return false;
             }
         }
@@ -296,7 +343,7 @@ impl<'matrix> Search<'matrix> {
         location
     }
 
-    fn explain_unification_failure(&mut self, l: Located<Literal>, k: Located<Literal>) {
+    fn explain_connection_failure(&mut self, l: Located<Literal>, k: Located<Literal>) {
         self.scratch.clear();
         assert!(self.scratch.connect(l, k));
         for atom in &self.learn {
@@ -327,6 +374,46 @@ impl<'matrix> Search<'matrix> {
                     continue 'outer;
                 } else {
                     return;
+                }
+            }
+            unreachable!()
+        }
+    }
+
+    fn explain_equal(&mut self, left: Located<Term>, right: Located<Term>) {
+        self.learn.insert(Atom::Disequation(left, right));
+        self.scratch.clear();
+        for atom in &self.learn {
+            if let Atom::Bind(x, t) = *atom {
+                assert!(self.scratch.unify(x.map(Term::Var), t));
+            }
+        }
+        if self.scratch.equal(left, right) {
+            return;
+        }
+
+        'outer: loop {
+            let reset = self.scratch.len();
+            for atom in &self.atoms {
+                if self.learn.contains(atom) {
+                    continue;
+                }
+                let (x, t) = if let Atom::Bind(x, t) = *atom {
+                    (x, t)
+                } else {
+                    continue;
+                };
+                assert!(self.scratch.unify(x.map(Term::Var), t));
+                if !self.scratch.equal(left, right) {
+                    continue;
+                }
+                self.scratch.truncate(reset);
+                self.learn.insert(*atom);
+                assert!(self.scratch.unify(x.map(Term::Var), t));
+                if self.scratch.equal(left, right) {
+                    return;
+                } else {
+                    continue 'outer;
                 }
             }
             unreachable!()
