@@ -180,23 +180,6 @@ impl<'matrix> Search<'matrix> {
             ancestor = member.parent;
         }
 
-        // regularity
-        let restore_atoms = self.atoms.len();
-        let mut ancestor = node.parent;
-        let k = node.parent.locate(Term::App(node.literal.atom));
-        while ancestor != ROOT {
-            let member = self.tableau[ancestor];
-            let l = member.parent.locate(Term::App(member.literal.atom));
-            if member.literal.polarity == node.literal.polarity {
-                self.scratch.clear();
-                if self.scratch.unify(l, k) {
-                    self.atoms.insert(Atom::Disequation(l, k));
-                }
-            }
-            ancestor = member.parent;
-        }
-        // TODO check regularity ahead of time?
-
         let Literal { polarity, atom } = node.literal;
         if node.depth == self.depth {
             // TODO try to avoid learning depth limit here?
@@ -206,11 +189,6 @@ impl<'matrix> Search<'matrix> {
                     return true;
                 }
             }
-        }
-
-        // remove regularity disequations from learned clause on failure
-        for atom in self.atoms.drain(restore_atoms..) {
-            self.learn.remove(&atom);
         }
 
         false
@@ -278,6 +256,20 @@ impl<'matrix> Search<'matrix> {
                 .iter()
                 .map(|d| Atom::Disequation(open.locate(d.left), open.locate(d.right))),
         );
+
+        // regularity - TODO same for all extensions?
+        let mut ancestor = open_node.parent;
+        let k = open_node.parent.locate(Term::App(open_node.literal.atom));
+        while ancestor != ROOT {
+            let member = self.tableau[ancestor];
+            let l = member.parent.locate(Term::App(member.literal.atom));
+            self.scratch.clear();
+            if self.scratch.unify(l, k) {
+                self.atoms.insert(Atom::Disequation(l, k));
+            }
+            ancestor = member.parent;
+        }
+
         if !self.check_atoms_since(restore_atoms) {
             self.substitution.truncate(restore_subst);
             self.tableau.truncate(restore_tableau);

@@ -127,7 +127,10 @@ pub(crate) struct Extension {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Source {
-    Equality,
+    Reflexivity,
+    Symmetry,
+    Transitivity,
+    Congruence,
     Axiom { path: Rc<String>, name: String },
 }
 

@@ -56,6 +56,7 @@ impl Builder {
     }
 
     fn clause(&mut self, literals: Vec<Literal>, mut info: Info) {
+        let is_reflexivity = matches!(info.source, Source::Reflexivity);
         let positive = literals.iter().all(|lit| lit.polarity);
         info.number = self.matrix.clauses.len();
 
@@ -75,6 +76,18 @@ impl Builder {
                     ) {
                         disequations.push(disequation)
                     }
+                }
+            }
+            if l.polarity && l.atom.symbol.is_equality() && !is_reflexivity {
+                let disequation = Disequation {
+                    left: l.atom.args[0],
+                    right: l.atom.args[1],
+                };
+                if self.subst.unify(
+                    ROOT.locate(disequation.left),
+                    ROOT.locate(disequation.right),
+                ) {
+                    disequations.push(disequation)
                 }
             }
         }
@@ -120,10 +133,10 @@ impl Builder {
         } else {
             return;
         };
-        let info = Info {
+        let info = |source| Info {
             is_goal: false,
-            source: Source::Equality,
-            number: self.matrix.clauses.len(),
+            source,
+            number: 0,
         };
         let symbols = std::mem::take(&mut self.symbols);
         for symbol in symbols.into_iter().map(Perfect) {
@@ -169,7 +182,7 @@ impl Builder {
                     });
                 }
             }
-            self.clause(clause, info.clone());
+            self.clause(clause, info(Source::Congruence));
         }
 
         let x = Term::Var(0);
@@ -185,7 +198,7 @@ impl Builder {
                 polarity: true,
                 atom: xx,
             }],
-            info.clone(),
+            info(Source::Reflexivity),
         );
         self.clause(
             vec![
@@ -198,7 +211,7 @@ impl Builder {
                     atom: yx,
                 },
             ],
-            info.clone(),
+            info(Source::Symmetry),
         );
         self.clause(
             vec![
@@ -215,7 +228,7 @@ impl Builder {
                     atom: xz,
                 },
             ],
-            info,
+            info(Source::Transitivity),
         );
     }
 
