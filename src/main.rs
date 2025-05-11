@@ -45,7 +45,7 @@ fn start(options: &Options) {
 
     let mut search = Search::new(&matrix);
     while !search.is_closed() {
-        search.expand_or_backtrack();
+        search.step_or_backtrack();
     }
 
     let stdout = stdout();

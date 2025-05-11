@@ -46,18 +46,26 @@ impl DB {
         self.watch.entry(watched).or_default().push(clause);
     }
 
-    pub(crate) fn find_conflict(&mut self, atom: Atom, assignment: &Assignment) -> Option<&[Atom]> {
+    pub(crate) fn find_conflicts(
+        &mut self,
+        atom: Atom,
+        assignment: &Assignment,
+    ) -> Option<&Vec<Box<[Atom]>>> {
         let mut needs_move = self.watch.remove(&atom)?;
-        while let Some(clause) = needs_move.pop() {
-            if let Some(watched) = watch(&clause, assignment) {
-                self.watch.entry(watched).or_default().push(clause);
+        let mut i = 0;
+        while i < needs_move.len() {
+            if let Some(watched) = watch(&needs_move[i], assignment) {
+                self.watch
+                    .entry(watched)
+                    .or_default()
+                    .push(needs_move.swap_remove(i));
             } else {
-                // abort, conflict found
-                let reinserted = self.watch.entry(atom).or_insert(needs_move);
-                reinserted.push(clause);
-                return reinserted.last().map(|b| &**b);
+                i += 1;
             }
         }
-        None
+        if needs_move.is_empty() {
+            return None;
+        }
+        Some(self.watch.entry(atom).or_insert(needs_move))
     }
 }
