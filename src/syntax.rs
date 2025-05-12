@@ -51,10 +51,27 @@ impl Symbol {
     }
 }
 
+pub(crate) trait IsGround {
+    fn is_ground(&self) -> bool;
+}
+
+impl IsGround for usize {
+    fn is_ground(&self) -> bool {
+        false
+    }
+}
+
+impl<T: IsGround> IsGround for Perfect<T> {
+    fn is_ground(&self) -> bool {
+        (**self).is_ground()
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub(crate) struct Application {
     pub(crate) symbol: Perfect<Symbol>,
     pub(crate) args: Box<[Term]>,
+    pub(crate) ground: bool,
 }
 
 impl fmt::Display for Application {
@@ -71,6 +88,12 @@ impl fmt::Display for Application {
     }
 }
 
+impl IsGround for Application {
+    fn is_ground(&self) -> bool {
+        self.ground
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) enum Term {
     Var(usize),
@@ -82,6 +105,15 @@ impl fmt::Display for Term {
         match self {
             Term::Var(x) => write!(f, "X{}", x),
             Term::App(app) => write!(f, "{}", app),
+        }
+    }
+}
+
+impl IsGround for Term {
+    fn is_ground(&self) -> bool {
+        match self {
+            Term::Var(_) => false,
+            Term::App(app) => app.ground,
         }
     }
 }
@@ -104,6 +136,12 @@ impl fmt::Display for Literal {
             }
             write!(f, "{}", self.atom)
         }
+    }
+}
+
+impl IsGround for Literal {
+    fn is_ground(&self) -> bool {
+        self.atom.is_ground()
     }
 }
 

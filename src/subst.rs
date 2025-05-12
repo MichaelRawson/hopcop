@@ -2,7 +2,7 @@ use fnv::FnvBuildHasher;
 use indexmap::IndexMap;
 use std::fmt;
 
-use crate::syntax::{Application, Literal, Term};
+use crate::syntax::{Application, IsGround, Literal, Term};
 use crate::util::Perfect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,16 +24,14 @@ impl fmt::Display for Location {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Located<T> {
-    pub(crate) location: Location,
-    pub(crate) item: T,
+    location: Location,
+    item: T,
 }
 
 impl Location {
-    pub(crate) fn locate<T>(self, item: T) -> Located<T> {
-        Located {
-            location: self,
-            item,
-        }
+    pub(crate) fn locate<T: IsGround>(self, item: T) -> Located<T> {
+        let location = if item.is_ground() { ROOT } else { self };
+        Located { location, item }
     }
 }
 
@@ -44,11 +42,8 @@ impl<T: fmt::Display> fmt::Display for Located<T> {
 }
 
 impl<T> Located<T> {
-    fn transfer<S>(&self, item: S) -> Located<S> {
-        Located {
-            location: self.location,
-            item,
-        }
+    fn transfer<S: IsGround>(&self, item: S) -> Located<S> {
+        self.location.locate(item)
     }
 
     pub(crate) fn map<S, F: FnOnce(T) -> S>(self, f: F) -> Located<S> {

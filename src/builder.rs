@@ -159,10 +159,12 @@ impl Builder {
             let t1 = self.application(Application {
                 symbol,
                 args: args1.into(),
+                ground: false,
             });
             let t2 = self.application(Application {
                 symbol,
                 args: args2.into(),
+                ground: false,
             });
             match symbol.sort {
                 Sort::Obj => {
@@ -233,9 +235,11 @@ impl Builder {
     }
 
     fn equality(&mut self, eq: Perfect<Symbol>, left: Term, right: Term) -> Perfect<Application> {
+        let ground = left.is_ground() && right.is_ground();
         self.application(Application {
             symbol: eq,
             args: vec![left, right].into(),
+            ground,
         })
     }
 
@@ -247,9 +251,12 @@ impl Builder {
     }
 
     fn rc_application(&mut self, app: &RcApplication) -> Perfect<Application> {
+        let args: Box<[_]> = app.args.iter().map(|t| self.rc_term(t)).collect();
+        let ground = args.iter().all(Term::is_ground);
         let app = Application {
             symbol: app.symbol,
-            args: app.args.iter().map(|t| self.rc_term(t)).collect(),
+            args,
+            ground,
         };
         self.application(app)
     }
