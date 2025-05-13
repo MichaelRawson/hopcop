@@ -1,4 +1,4 @@
-use fnv::{FnvBuildHasher, FnvHashSet};
+use fnv::FnvBuildHasher;
 use indexmap::IndexSet;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -36,7 +36,8 @@ pub(crate) struct Search<'matrix> {
     // set of open branches in no particular order
     open: Vec<Location>,
     // the clause we are currently learning
-    learn: FnvHashSet<Atom>,
+    // could just be a hashset but would like consistent iteration order
+    learn: IndexSet<Atom, FnvBuildHasher>,
     // during any attempted inference, the previous length of the trail
     // used to determine which atoms should be learned
     learn_from: usize,
@@ -69,7 +70,7 @@ impl<'matrix> Search<'matrix> {
             closed: vec![],
             restore: vec![],
             open: vec![],
-            learn: FnvHashSet::default(),
+            learn: IndexSet::default(),
             learn_from: 0,
             db: DB::default(),
             depth: 1,
@@ -179,7 +180,7 @@ impl<'matrix> Search<'matrix> {
         self.restore(restore);
 
         // insert the learned clause to the database
-        self.db.insert(self.learn.drain().collect(), &self.trail);
+        self.db.insert(self.learn.drain(..).collect(), &self.trail);
     }
 
     // try to apply a start rule
@@ -391,7 +392,7 @@ impl<'matrix> Search<'matrix> {
                             .iter()
                             .filter(|a| {
                                 self.trail.get_index_of(*a).unwrap() < self.learn_from
-                                    && !self.learn.contains(a)
+                                    && !self.learn.contains(*a)
                             })
                             .count()
                     })
