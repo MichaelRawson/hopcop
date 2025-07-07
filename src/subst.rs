@@ -69,7 +69,7 @@ impl fmt::Display for Substitution {
             if !first {
                 write!(f, ", ")?;
             }
-            write!(f, "{} -> {}", x, t)?;
+            write!(f, "{x} -> {t}")?;
             first = false;
         }
         write!(f, "}}")

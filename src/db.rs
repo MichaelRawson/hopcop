@@ -17,10 +17,10 @@ pub(crate) enum Atom {
 impl fmt::Display for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Atom::Place(location, literal) => write!(f, "{}@{}", literal, location),
-            Atom::Bind(x, t) => write!(f, "{}->{}", x, t),
-            Atom::CannotReduce(l, k) => write!(f, "{}≁{}", l, k),
-            Atom::Disequation(s, t) => write!(f, "{}≠{}", s, t),
+            Atom::Place(location, literal) => write!(f, "{literal}@{location}"),
+            Atom::Bind(x, t) => write!(f, "{x}->{t}"),
+            Atom::CannotReduce(l, k) => write!(f, "{l}≁{k}"),
+            Atom::Disequation(s, t) => write!(f, "{s}≠{t}"),
         }
     }
 }

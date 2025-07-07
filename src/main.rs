@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 const STACK: usize = 0x1000000;
 
 fn report_err<T>(err: anyhow::Error) -> T {
-    eprintln!("hopcop: {:?}", err.context("fatal error, exiting"));
+    let err = err.context("fatal error, exiting");
+    eprintln!("hopcop: {err}");
     std::process::exit(1);
 }
 
@@ -31,7 +32,7 @@ fn start(options: &Options) {
     });
     if options.clausify {
         for clause in &matrix.clauses {
-            println!("{}", clause);
+            println!("{clause}");
         }
         return;
     }

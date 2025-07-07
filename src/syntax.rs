@@ -23,11 +23,11 @@ impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Equality => write!(f, "sPE"),
-            Self::Atom(s) | Self::Number(s) => write!(f, "{}", s),
-            Self::Quoted(quoted) => write!(f, "'{}'", quoted),
-            Self::Distinct(distinct) => write!(f, "\"{}\"", distinct),
-            Self::Skolem(n) => write!(f, "sK{}", n),
-            Self::Definition(n) => write!(f, "sP{}", n),
+            Self::Atom(s) | Self::Number(s) => write!(f, "{s}"),
+            Self::Quoted(quoted) => write!(f, "'{quoted}'"),
+            Self::Distinct(distinct) => write!(f, "\"{distinct}\""),
+            Self::Skolem(n) => write!(f, "sK{n}"),
+            Self::Definition(n) => write!(f, "sP{n}"),
         }
     }
 }
@@ -80,7 +80,7 @@ impl fmt::Display for Application {
         if !self.args.is_empty() {
             write!(f, "({}", &self.args[0])?;
             for arg in &self.args[1..] {
-                write!(f, ",{}", arg)?;
+                write!(f, ",{arg}")?;
             }
             write!(f, ")")?;
         }
@@ -103,8 +103,8 @@ pub(crate) enum Term {
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Var(x) => write!(f, "X{}", x),
-            Term::App(app) => write!(f, "{}", app),
+            Term::Var(x) => write!(f, "X{x}"),
+            Term::App(app) => write!(f, "{app}"),
         }
     }
 }
@@ -203,12 +203,12 @@ impl fmt::Display for Clause {
         } else {
             write!(f, "{}", self.literals[0])?;
             for literal in &self.literals[1..] {
-                write!(f, " | {}", literal)?;
+                write!(f, " | {literal}")?;
             }
         }
         write!(f, "). %")?;
         for disequation in &self.disequations {
-            write!(f, " {}", disequation)?;
+            write!(f, " {disequation}")?;
         }
         Ok(())
     }
