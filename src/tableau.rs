@@ -1,19 +1,19 @@
 use fnv::{FnvBuildHasher, FnvHashMap};
 use indexmap::IndexMap;
 
-use crate::subst::{Location, ROOT};
-use crate::syntax::Literal;
+use crate::subst::{Branch, Location, ROOT};
+use crate::syntax::Clause;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
-    pub(crate) parent: Location,
+    pub(crate) branch: Branch,
     pub(crate) depth: usize,
-    pub(crate) literal: Literal,
+    pub(crate) clause: &'static Clause,
 }
 
 #[derive(Default)]
 pub(crate) struct Tableau {
-    map: FnvHashMap<(Location, usize), Location>,
+    map: FnvHashMap<Branch, Location>,
     nodes: IndexMap<Location, Node, FnvBuildHasher>,
 }
 
@@ -45,41 +45,53 @@ impl Tableau {
         self.nodes.contains_key(&location)
     }
 
-    pub(crate) fn locate(&mut self, parent: Location, child: usize) -> Location {
+    pub(crate) fn locate(&mut self, branch: Branch) -> Location {
         let next = Location::new(self.map.len() + 1);
-        *self.map.entry((parent, child)).or_insert(next)
+        *self.map.entry(branch).or_insert(next)
     }
 
-    pub(crate) fn add_child(
-        &mut self,
-        parent: Location,
-        literal: Literal,
-        index: usize,
-    ) -> Location {
-        let depth = if parent == ROOT {
-            1
-        } else {
-            self[parent].depth + 1
-        };
-        let child = self.locate(parent, index);
-        self.nodes.insert(
-            child,
+    pub(crate) fn set_root_clause(&mut self, clause: &'static Clause) {
+        let replaced = self.nodes.insert(
+            ROOT,
             Node {
-                parent,
-                depth,
-                literal,
+                branch: Branch {
+                    location: ROOT,
+                    index: usize::MAX,
+                },
+                depth: 0,
+                clause,
             },
         );
-        child
+        assert!(replaced.is_none());
+    }
+
+    pub(crate) fn add_clause(&mut self, branch: Branch, clause: &'static Clause) {
+        let depth = self[branch.location].depth + 1;
+        let location = self.locate(branch);
+        let replaced = self.nodes.insert(
+            location,
+            Node {
+                branch,
+                depth,
+                clause,
+            },
+        );
+        assert!(replaced.is_none());
     }
 
     pub(crate) fn graphviz(&self) {
         println!("digraph tableau {{");
         println!("\tnode [shape=none];");
-        println!("\tl0 [label=\"\"];");
+        println!("\tl0_{} [label=\"\"];", usize::MAX);
         for (location, node) in &self.nodes {
-            println!("\t{} [label=\"{}. {}\"];", location, location, node.literal);
-            println!("\t{} -> {};", node.parent, location);
+            for (index, literal) in node.clause.literals.iter().enumerate() {
+                let branch = Branch {
+                    location: *location,
+                    index,
+                };
+                println!("\t{branch} [label=\"{literal}\"];");
+                println!("\t{} -> {};", node.branch, branch);
+            }
         }
         println!("}}");
     }

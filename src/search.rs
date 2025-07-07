@@ -4,7 +4,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::db::{Atom, DB};
-use crate::subst::{Located, Location, ROOT, Substitution};
+use crate::subst::{Branch, Located, ROOT, Substitution};
 use crate::syntax::{Clause, Extension, Literal, Matrix, Term};
 use crate::tableau::Tableau;
 
@@ -30,11 +30,11 @@ pub(crate) struct Search<'matrix> {
     // variable trail: an ordered hashset
     trail: IndexSet<Atom, FnvBuildHasher>,
     // branches that have been closed: useful for bactracking `open`
-    closed: Vec<Location>,
+    closed: Vec<Branch>,
     // restore points after each step
     restore: Vec<Restore>,
     // set of open branches in no particular order
-    open: Vec<Location>,
+    open: Vec<Branch>,
     // the clause we are currently learning
     // could just be a hashset but would like consistent iteration order
     learn: IndexSet<Atom, FnvBuildHasher>,
@@ -56,7 +56,9 @@ impl<'matrix> Search<'matrix> {
         self.substitution.truncate(restore.substitution);
         self.trail.truncate(restore.trail);
         self.open.extend(self.closed.drain(restore.closed..));
-        self.open.retain(|open| self.tableau.contains(*open));
+        // TODO iffy?
+        self.open
+            .retain(|branch| self.tableau.contains(branch.location));
     }
 
     // the beginning of proof search
@@ -132,8 +134,10 @@ impl<'matrix> Search<'matrix> {
             self.open.push(open);
 
             // add literal itself to learned clause
-            self.learn
-                .insert(Atom::Place(open, self.tableau[open].literal));
+            self.learn.insert(Atom::Place(
+                open,
+                self.tableau[open.location].clause.literals[open.index],
+            ));
         }
 
         // all rules failed here
@@ -202,11 +206,22 @@ impl<'matrix> Search<'matrix> {
         assert!(self.closed.is_empty());
         assert!(self.open.is_empty());
 
-        // add all the literals to the tableau and `open`
-        for (index, literal) in start.literals.iter().copied().enumerate() {
-            let location = self.add_child(ROOT, literal, index, false);
-            self.open.push(location);
+        // add the clause to the tableau
+        self.tableau.set_root_clause(start);
+        for (index, literal) in start.literals.iter().enumerate() {
+            self.open.push(Branch {
+                location: ROOT,
+                index,
+            });
+            self.trail.insert(Atom::Place(
+                Branch {
+                    location: ROOT,
+                    index,
+                },
+                *literal,
+            ));
         }
+
         // add the disequations from the new clause
         self.trail.extend(
             start
@@ -225,18 +240,17 @@ impl<'matrix> Search<'matrix> {
     }
 
     // try to close an open branch with a reduction or extension rule
-    fn try_close(&mut self, open: Location) -> bool {
-        let node = self.tableau[open];
-
+    fn try_close(&mut self, open: Branch) -> bool {
         // reduction rules: iterate upwards through ancestors
-        let mut ancestor = node.parent;
-        while ancestor != ROOT {
+        let mut ancestor = open;
+        while ancestor.location != ROOT {
+            ancestor = self.tableau[ancestor.location].branch;
             if self.reduce(ancestor, open) {
                 return true;
             }
-            ancestor = self.tableau[ancestor].parent;
         }
 
+        let node = self.tableau[open.location];
         // at the iterative deepening limit, no extensions can be made
         if node.depth == self.depth {
             return false;
@@ -244,18 +258,20 @@ impl<'matrix> Search<'matrix> {
 
         // enforce regularity condition
         let restore_trail = self.trail.len();
-        let mut ancestor = node.parent;
-        let k = node.parent.locate(node.literal);
-        while ancestor != ROOT {
-            let member = self.tableau[ancestor];
-            let l = member.parent.locate(member.literal);
+        let k = open.location.locate(node.clause.literals[open.index]);
+        let mut ancestor = open;
+        while ancestor.location != ROOT {
+            ancestor = self.tableau[ancestor.location].branch;
+            let member = self.tableau[ancestor.location];
+            let l = ancestor
+                .location
+                .locate(member.clause.literals[ancestor.index]);
             if self.could_unify(l, k) {
                 self.trail.insert(Atom::Disequation(
                     l.map(|l| Term::App(l.atom)),
                     k.map(|k| Term::App(k.atom)),
                 ));
             }
-            ancestor = member.parent;
         }
 
         // check we don't already violate regularity by extending rather than reducing
@@ -265,7 +281,7 @@ impl<'matrix> Search<'matrix> {
         }
 
         // try extension rules
-        let Literal { polarity, atom } = node.literal;
+        let Literal { polarity, atom } = node.clause.literals[open.index];
         for extension in self
             .matrix
             .index
@@ -283,15 +299,17 @@ impl<'matrix> Search<'matrix> {
     }
 
     // try to reduce `open` with `parent`
-    fn reduce(&mut self, parent: Location, open: Location) -> bool {
-        let parent_node = self.tableau[parent];
-        let open_node = self.tableau[open];
-        let l = parent_node.parent.locate(parent_node.literal);
-        let k = open_node.parent.locate(open_node.literal);
+    fn reduce(&mut self, ancestor: Branch, open: Branch) -> bool {
+        let ancestor_node = self.tableau[ancestor.location];
+        let open_node = self.tableau[open.location];
+        let ancestor_literal = ancestor_node.clause.literals[ancestor.index];
+        let open_literal = open_node.clause.literals[open.index];
+        let l = ancestor.location.locate(ancestor_literal);
+        let k = open.location.locate(open_literal);
 
         // if `l` could never reduce `k`, we give a short explanation
-        if parent_node.literal.polarity == open_node.literal.polarity || !self.could_unify(l, k) {
-            self.learn.insert(Atom::CannotReduce(parent, open));
+        if ancestor_literal.polarity == open_literal.polarity || !self.could_unify(l, k) {
+            self.learn.insert(Atom::CannotReduce(ancestor, open));
             return false;
         }
 
@@ -302,7 +320,7 @@ impl<'matrix> Search<'matrix> {
             // learn from:
             // placement of `l` (already inserted)
             // placement of `k` (below)
-            self.learn.insert(Atom::Place(parent, parent_node.literal));
+            self.learn.insert(Atom::Place(ancestor, ancestor_literal));
             // ... and a series of variable bindings that prevented them unifying
             self.explain_connection_failure(l, k);
             return false;
@@ -326,10 +344,11 @@ impl<'matrix> Search<'matrix> {
     }
 
     // try to extend at `open` with a particular `extension` step
-    fn extend(&mut self, open: Location, extension: Extension) -> bool {
-        let node = self.tableau[open];
-        let l = node.parent.locate(node.literal);
-        let k = open.locate(extension.clause.literals[extension.index]);
+    fn extend(&mut self, open: Branch, extension: Extension) -> bool {
+        let node = self.tableau[open.location];
+        let l = open.location.locate(node.clause.literals[open.index]);
+        let location = self.tableau.locate(open);
+        let k = location.locate(extension.clause.literals[extension.index]);
         // if l and k could never unify, we don't need to consider this step further
         if !self.could_unify(l, k) {
             return false;
@@ -350,10 +369,33 @@ impl<'matrix> Search<'matrix> {
         self.trail
             .extend(self.scratch.bindings().map(|(x, t)| Atom::Bind(*x, *t)));
         // add the clause to the tableau...
-        for (index, literal) in extension.clause.literals.iter().copied().enumerate() {
-            let location = self.add_child(open, literal, index, index != extension.index);
+        self.tableau.add_clause(open, extension.clause);
+        for (index, literal) in extension.clause.literals.iter().enumerate() {
+            let branch = Branch { location, index };
+            self.trail
+                .insert(Atom::Place(Branch { location, index }, *literal));
             if index != extension.index {
-                self.open.push(location);
+                self.open.push(branch)
+            }
+
+            // check whether it's possible to reduce this literal with anything on the path
+            let mut ancestor = open;
+            loop {
+                let node = self.tableau[ancestor.location];
+                let candidate = node.clause.literals[ancestor.index];
+                if candidate.polarity == literal.polarity
+                    || !self.could_unify(
+                        ancestor.location.locate(candidate),
+                        location.locate(*literal),
+                    )
+                {
+                    // if not, add a "cannot reduce" atom
+                    self.trail.insert(Atom::CannotReduce(ancestor, branch));
+                }
+                if ancestor.location == ROOT {
+                    break;
+                }
+                ancestor = node.branch;
             }
         }
         // ...and its disequations to the trail
@@ -362,7 +404,7 @@ impl<'matrix> Search<'matrix> {
                 .clause
                 .disequations
                 .iter()
-                .map(|d| Atom::Disequation(open.locate(d.left), open.locate(d.right))),
+                .map(|d| Atom::Disequation(location.locate(d.left), location.locate(d.right))),
         );
 
         // something bad, give up on this one
@@ -430,35 +472,6 @@ impl<'matrix> Search<'matrix> {
     fn could_unify(&mut self, l: Located<Literal>, k: Located<Literal>) -> bool {
         self.scratch.clear();
         self.scratch.connect(l, k)
-    }
-
-    // add a literal to the tableau and add suitable atoms to the trail
-    fn add_child(
-        &mut self,
-        open: Location,
-        literal: Literal,
-        index: usize,
-        try_reduce: bool,
-    ) -> Location {
-        let location = self.tableau.add_child(open, literal, index);
-        self.trail.insert(Atom::Place(location, literal));
-        if !try_reduce {
-            return location;
-        }
-
-        // iterate through its ancestors and check whether a reduction is possible
-        let mut ancestor = open;
-        while ancestor != ROOT {
-            let node = self.tableau[ancestor];
-            if node.literal.polarity == literal.polarity
-                || !self.could_unify(node.parent.locate(node.literal), open.locate(literal))
-            {
-                // if not, add a "cannot reduce" atom
-                self.trail.insert(Atom::CannotReduce(ancestor, location));
-            }
-            ancestor = node.parent;
-        }
-        location
     }
 
     // explain why `l` cannot be unified with `k` in terms of bindings from `trail[..learn_from]`

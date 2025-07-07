@@ -23,6 +23,18 @@ impl fmt::Display for Location {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct Branch {
+    pub(crate) location: Location,
+    pub(crate) index: usize,
+}
+
+impl fmt::Display for Branch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}_{}", self.location, self.index)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Located<T> {
     location: Location,
     item: T,

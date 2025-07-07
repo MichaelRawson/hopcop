@@ -3,21 +3,21 @@ use indexmap::IndexSet;
 use std::fmt;
 use std::hash::Hash;
 
-use crate::subst::{Located, Location};
+use crate::subst::{Branch, Located};
 use crate::syntax::{Literal, Term};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Atom {
-    Place(Location, Literal),
+    Place(Branch, Literal),
     Bind(Located<usize>, Located<Term>),
-    CannotReduce(Location, Location),
+    CannotReduce(Branch, Branch),
     Disequation(Located<Term>, Located<Term>),
 }
 
 impl fmt::Display for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Atom::Place(location, literal) => write!(f, "{literal}@{location}"),
+            Atom::Place(branch, literal) => write!(f, "{literal}@{branch}"),
             Atom::Bind(x, t) => write!(f, "{x}->{t}"),
             Atom::CannotReduce(l, k) => write!(f, "{l}≁{k}"),
             Atom::Disequation(s, t) => write!(f, "{s}≠{t}"),
