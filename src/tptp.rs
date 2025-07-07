@@ -366,7 +366,7 @@ impl Loader {
         ))
     }
 
-    fn annotated<D: Dialect>(
+    fn annotated<D: Dialect + fmt::Display>(
         &mut self,
         selection: Option<&FnvHashSet<Name>>,
         path: Rc<String>,
@@ -384,7 +384,7 @@ impl Loader {
         let is_goal = negate || role == "negated_conjecture";
         let source = syntax::Source::Axiom {
             path,
-            name: format!("{}", &annotated.name),
+            name: format!("{}", &annotated.name).into(),
         };
 
         self.fresh = 0;
@@ -394,7 +394,7 @@ impl Loader {
             self.pp.builder.notify_have_conjecture();
             formula = formula.negated();
         }
-        self.pp.process(formula, is_goal, source);
+        self.pp.process(formula, negate, is_goal, source);
         Ok(())
     }
 

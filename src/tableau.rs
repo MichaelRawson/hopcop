@@ -50,12 +50,16 @@ impl Tableau {
         *self.map.entry(branch).or_insert(next)
     }
 
+    pub(crate) fn locations(&self) -> impl Iterator<Item = Location> {
+        self.nodes.keys().copied()
+    }
+
     pub(crate) fn set_root_clause(&mut self, clause: &'static Clause) {
         let replaced = self.nodes.insert(
             ROOT,
             Node {
                 branch: Branch {
-                    location: ROOT,
+                    location: Location::new(usize::MAX),
                     index: usize::MAX,
                 },
                 depth: 0,
@@ -82,7 +86,7 @@ impl Tableau {
     pub(crate) fn graphviz(&self) {
         println!("digraph tableau {{");
         println!("\tnode [shape=none];");
-        println!("\tl0_{} [label=\"\"];", usize::MAX);
+        println!("\tl{}_{} [label=\"\"];", usize::MAX, usize::MAX);
         for (location, node) in &self.nodes {
             for (index, literal) in node.clause.literals.iter().enumerate() {
                 let branch = Branch {

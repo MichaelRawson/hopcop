@@ -169,11 +169,12 @@ pub(crate) enum Source {
     Symmetry,
     Transitivity,
     Congruence,
-    Axiom { path: Rc<String>, name: String },
+    Axiom { path: Rc<String>, name: Rc<String> },
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Info {
+    pub(crate) negated: bool,
     pub(crate) is_goal: bool,
     pub(crate) number: usize,
     pub(crate) source: Source,

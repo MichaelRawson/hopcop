@@ -1,12 +1,15 @@
-use fnv::FnvBuildHasher;
+use fnv::{FnvBuildHasher, FnvHashSet};
 use indexmap::IndexSet;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use std::io::Write;
 
 use crate::db::{Atom, DB};
-use crate::subst::{Branch, Located, ROOT, Substitution};
-use crate::syntax::{Clause, Extension, Literal, Matrix, Term};
+use crate::options::Options;
+use crate::subst::{Branch, Located, ROOT, Substituted, Substitution};
+use crate::syntax::{Clause, Extension, Literal, Matrix, Source, Term};
 use crate::tableau::Tableau;
+use crate::tstp;
 
 // a point to restore `Search` to:
 // several indices to truncate its internal data
@@ -56,7 +59,6 @@ impl<'matrix> Search<'matrix> {
         self.substitution.truncate(restore.substitution);
         self.trail.truncate(restore.trail);
         self.open.extend(self.closed.drain(restore.closed..));
-        // TODO iffy?
         self.open
             .retain(|branch| self.tableau.contains(branch.location));
     }
@@ -89,6 +91,61 @@ impl<'matrix> Search<'matrix> {
     // graphviz dump for checking proofs
     pub(crate) fn graphviz(&self) {
         self.tableau.graphviz()
+    }
+
+    // print TSTP proof, assuming we found one
+    pub(crate) fn tstp<W: Write>(&self, w: &mut W, options: &Options) -> anyhow::Result<()> {
+        assert!(self.is_closed());
+        tstp::theorem(w, options)?;
+        writeln!(w, "% SZS output start CNFRefutation")?;
+
+        let mut input_clauses = FnvHashSet::default();
+        for location in self.tableau.locations() {
+            let node = self.tableau[location];
+            if !matches!(node.clause.info.source, Source::Axiom { .. }) {
+                continue;
+            }
+            let number = node.clause.info.number;
+            if input_clauses.insert(number) {
+                tstp::input_clause(w, node.clause)?;
+            }
+            write!(w, "cnf({location}, plain, ")?;
+            let mut first = true;
+            for literal in &node.clause.literals {
+                if !first {
+                    write!(w, " | ")?;
+                }
+                first = false;
+                write!(
+                    w,
+                    "{}",
+                    Substituted {
+                        substitution: &self.substitution,
+                        item: location.locate(*literal),
+                    }
+                )?;
+            }
+            writeln!(w, ", inference(instantiation, [status(thm)], [{number}])).",)?;
+        }
+        write!(
+            w,
+            "cnf(final, plain, $false, inference(ground_refutation, [status(thm)], ["
+        )?;
+        let mut first = true;
+        for location in self.tableau.locations() {
+            let node = self.tableau[location];
+            if !matches!(node.clause.info.source, Source::Axiom { .. }) {
+                continue;
+            }
+            if !first {
+                write!(w, ", ")?;
+            }
+            write!(w, "{location}")?;
+            first = false;
+        }
+        writeln!(w, "])).")?;
+        writeln!(w, "% SZS output end CNFRefutation")?;
+        Ok(())
     }
 
     // called iteratively externally:

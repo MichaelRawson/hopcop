@@ -51,10 +51,11 @@ fn start(options: &Options) {
 
     let stdout = stdout();
     let mut lock = stdout.lock();
-    tstp::theorem(&mut lock, options)
-        .context("printing success")
+    //search.graphviz();
+    search
+        .tstp(&mut lock, options)
+        .context("printing proof")
         .unwrap_or_else(report_err);
-    search.graphviz();
     std::process::exit(0);
 }
 

@@ -134,6 +134,7 @@ impl Builder {
             return;
         };
         let info = |source| Info {
+            negated: false,
             is_goal: false,
             source,
             number: 0,

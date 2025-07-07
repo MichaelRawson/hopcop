@@ -223,3 +223,77 @@ impl Substitution {
         self.map[since..].iter()
     }
 }
+
+pub(crate) struct Substituted<'a, T> {
+    pub(crate) substitution: &'a Substitution,
+    pub(crate) item: T,
+}
+
+impl<'a> fmt::Display for Substituted<'a, Located<Perfect<Application>>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let located = &self.item;
+        let app = located.item;
+        write!(f, "{}", app.symbol.name)?;
+        if !app.args.is_empty() {
+            write!(f, "(")?;
+            let mut first = true;
+            for arg in &app.args {
+                if !first {
+                    write!(f, ",")?;
+                }
+                first = false;
+                Substituted {
+                    substitution: self.substitution,
+                    item: located.transfer(*arg),
+                }
+                .fmt(f)?;
+            }
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> fmt::Display for Substituted<'a, Located<Term>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lookup = self.substitution.lookup(self.item);
+        match lookup.item {
+            Term::Var(x) => write!(f, "X{}_{}", x, lookup.location.0),
+            Term::App(app) => Substituted {
+                substitution: self.substitution,
+                item: lookup.transfer(app),
+            }
+            .fmt(f),
+        }
+    }
+}
+
+impl<'a> fmt::Display for Substituted<'a, Located<Literal>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let located = &self.item;
+        let literal = located.item;
+        if literal.atom.symbol.is_equality() {
+            Substituted {
+                substitution: self.substitution,
+                item: located.transfer(literal.atom.args[0]),
+            }
+            .fmt(f)?;
+            write!(f, "{}", if literal.polarity { " = " } else { " != " })?;
+            Substituted {
+                substitution: self.substitution,
+                item: located.transfer(literal.atom.args[1]),
+            }
+            .fmt(f)?;
+        } else {
+            if !literal.polarity {
+                write!(f, "~")?;
+            }
+            Substituted {
+                substitution: self.substitution,
+                item: located.transfer(literal.atom),
+            }
+            .fmt(f)?;
+        }
+        Ok(())
+    }
+}

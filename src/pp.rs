@@ -52,21 +52,28 @@ pub(crate) fn nnf(polarity: bool, formula: &Formula) -> Nnf {
 }
 
 impl PP {
-    pub(crate) fn process(&mut self, formula: Formula, is_goal: bool, source: Source) {
+    pub(crate) fn process(
+        &mut self,
+        formula: Formula,
+        negated: bool,
+        is_goal: bool,
+        source: Source,
+    ) {
         self.subst.clear();
         let nnf = nnf(true, &formula);
-        self.clausify(nnf, is_goal, &source);
+        self.clausify(nnf, negated, is_goal, &source);
     }
 
     pub(crate) fn finish(self) -> Matrix {
         self.builder.finish()
     }
 
-    fn clausify(&mut self, nnf: Nnf, is_goal: bool, source: &Source) {
+    fn clausify(&mut self, nnf: Nnf, negated: bool, is_goal: bool, source: &Source) {
         for mut clause in self.cnf(nnf) {
             self.rename_clause(&mut clause);
             let source = source.clone();
             let info = Info {
+                negated,
                 is_goal,
                 source,
                 number: 0,
@@ -78,6 +85,7 @@ impl PP {
             let source = source.clone();
             let is_goal = false;
             let info = Info {
+                negated,
                 is_goal,
                 source,
                 number: 0,
