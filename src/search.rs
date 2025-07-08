@@ -1,6 +1,8 @@
+use crate::syntax::IsGround;
 use fnv::{FnvBuildHasher, FnvHashSet};
 use indexmap::IndexSet;
 use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::io::Write;
 
@@ -50,6 +52,8 @@ pub(crate) struct Search<'matrix> {
     depth: usize,
     // scratch substitution for checking whether things unify
     scratch: Substitution,
+    // scratch space for shuffling extensions
+    extensions: Vec<Extension>,
 }
 
 impl<'matrix> Search<'matrix> {
@@ -79,6 +83,7 @@ impl<'matrix> Search<'matrix> {
             db: DB::default(),
             depth,
             scratch: Substitution::default(),
+            extensions: vec![],
         }
     }
 
@@ -187,6 +192,15 @@ impl<'matrix> Search<'matrix> {
     pub(crate) fn step_or_backtrack(&mut self) -> bool {
         if self.is_closed() {
             return false;
+        }
+
+        if self.rng.random::<f32>() < 0.0001 {
+            self.tableau.clear();
+            self.substitution.clear();
+            self.trail.clear();
+            self.closed.clear();
+            self.restore.clear();
+            self.open.clear();
         }
         /*
         eprint!("trail:");
@@ -339,8 +353,9 @@ impl<'matrix> Search<'matrix> {
         }
 
         let node = self.tableau[open.location];
+        let Literal { polarity, atom } = node.clause.literals[open.index];
         // at the iterative deepening limit, no extensions can be made
-        if node.depth == self.depth {
+        if node.depth >= self.depth && !atom.is_ground() {
             return false;
         }
 
@@ -369,16 +384,18 @@ impl<'matrix> Search<'matrix> {
         }
 
         // try extension rules
-        let Literal { polarity, atom } = node.clause.literals[open.index];
         let is_disequation = !polarity && matches!(atom.symbol.name, Name::Equality);
-        for extension in self
-            .matrix
-            .index
-            .get(&(!polarity, atom.symbol))
-            .into_iter()
-            .flatten()
-        {
-            if self.extend(open, *extension, is_disequation) {
+        self.extensions.clear();
+        self.extensions.extend(
+            self.matrix
+                .index
+                .get(&(!polarity, atom.symbol))
+                .into_iter()
+                .flatten(),
+        );
+        self.extensions.shuffle(&mut self.rng);
+        while let Some(extension) = self.extensions.pop() {
+            if self.extend(open, extension, is_disequation) {
                 return true;
             }
         }

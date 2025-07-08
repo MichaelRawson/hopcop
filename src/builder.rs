@@ -47,9 +47,6 @@ impl Builder {
         } else {
             self.matrix.start = self.goals;
         }
-        for extensions in self.matrix.index.values_mut() {
-            extensions.sort_by_key(|e| e.clause.literals.len());
-        }
         self.matrix
     }
 
