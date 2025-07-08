@@ -5,7 +5,7 @@ use fnv::FnvHashSet;
 use std::error::Error;
 use std::io::Read;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::{env, fmt, fs, path};
 use tptp::cnf::*;
 use tptp::common::*;
@@ -358,9 +358,9 @@ impl Loader {
     fn annotated<D: Dialect + fmt::Display>(
         &mut self,
         selection: Option<&FnvHashSet<Name>>,
-        path: Rc<String>,
+        path: Arc<String>,
         annotated: Annotated<D>,
-        original: Option<Rc<String>>,
+        original: Option<Arc<String>>,
     ) -> anyhow::Result<()> {
         if selection
             .map(|selection| !selection.contains(&annotated.name))
@@ -381,9 +381,11 @@ impl Loader {
         self.fresh = 0;
         self.free.clear();
         let mut formula = annotated.formula.load(self)?;
+        if negate {
+            formula = formula.negated();
+        }
         if is_goal {
             self.pp.builder.notify_have_conjecture();
-            formula = formula.negated();
         }
         self.pp.process(formula, negate, is_goal, source);
         Ok(())
@@ -395,7 +397,7 @@ impl Loader {
         selection: Option<FnvHashSet<Name>>,
         path: &path::Path,
     ) -> anyhow::Result<()> {
-        let display_path = Rc::new(format!("'{}'", path.display()));
+        let display_path = Arc::new(format!("'{}'", path.display()));
         let mut bytes = vec![];
         open_path(parent, path)?.read_to_end(&mut bytes)?;
         for statement in TPTPIterator::<()>::new(&bytes) {

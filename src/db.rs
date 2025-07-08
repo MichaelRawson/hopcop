@@ -37,10 +37,6 @@ fn watch(clause: &[Atom], assignment: &Assignment) -> Option<Atom> {
 }
 
 impl DB {
-    pub(crate) fn clear(&mut self) {
-        self.watch.clear();
-    }
-
     pub(crate) fn insert(&mut self, clause: Box<[Atom]>, assignment: &Assignment) {
         let watched = watch(&clause, assignment).expect("inserted conflicting clause");
         self.watch.entry(watched).or_default().push(clause);

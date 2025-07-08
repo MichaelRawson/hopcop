@@ -64,7 +64,7 @@ impl<'matrix> Search<'matrix> {
     }
 
     // the beginning of proof search
-    pub(crate) fn new(matrix: &'matrix Matrix) -> Self {
+    pub(crate) fn new(matrix: &'matrix Matrix, depth: usize) -> Self {
         Self {
             matrix,
             rng: SmallRng::seed_from_u64(0),
@@ -77,7 +77,7 @@ impl<'matrix> Search<'matrix> {
             learn: IndexSet::default(),
             learn_from: 0,
             db: DB::default(),
-            depth: 1,
+            depth,
             scratch: Substitution::default(),
         }
     }
@@ -183,8 +183,11 @@ impl<'matrix> Search<'matrix> {
     // called iteratively externally:
     // either (1) make an inference step: start, reduce, extend
     // or (2) realise we are stuck and backjump somewhere
-    pub(crate) fn step_or_backtrack(&mut self) {
-        assert!(!self.is_closed());
+    // returns whether to continue stepping
+    pub(crate) fn step_or_backtrack(&mut self) -> bool {
+        if self.is_closed() {
+            return false;
+        }
         /*
         eprint!("trail:");
         for atom in &self.trail {
@@ -208,7 +211,7 @@ impl<'matrix> Search<'matrix> {
         if self.open.is_empty() {
             if self.try_start() {
                 // start rule succeeded, we're done here
-                return;
+                return true;
             }
         } else {
             // randomly select open branch and remove it from `open`
@@ -217,7 +220,7 @@ impl<'matrix> Search<'matrix> {
             if self.try_close(open) {
                 // closing the branch succeeded, we're done here
                 self.closed.push(open);
-                return;
+                return true;
             }
             // failed to close, put it back
             self.open.push(open);
@@ -245,12 +248,7 @@ impl<'matrix> Search<'matrix> {
 
         // if the learned clause is empty, we need to increase depth limit
         if self.learn.is_empty() {
-            // DB contains clauses that are only true with the current depth limit, clear it
-            // does not pay off to try retaining them: exponentially more clauses at depth limit++
-            self.db.clear();
-            self.depth += 1;
-            dbg!(self.depth);
-            return;
+            return false;
         }
 
         // do the backjump
@@ -274,6 +272,7 @@ impl<'matrix> Search<'matrix> {
 
         // insert the learned clause to the database
         self.db.insert(self.learn.drain(..).collect(), &self.trail);
+        true
     }
 
     // try to apply a start rule

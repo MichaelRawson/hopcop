@@ -1,6 +1,8 @@
 use crate::util::Perfect;
 use fnv::{FnvHashMap, FnvHashSet};
-use std::{fmt, rc::Rc};
+use std::fmt;
+use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Sort {
@@ -170,9 +172,9 @@ pub(crate) enum Source {
     Transitivity,
     Congruence,
     Axiom {
-        path: Rc<String>,
-        name: Rc<String>,
-        original: Option<Rc<String>>,
+        path: Arc<String>,
+        name: Arc<String>,
+        original: Option<Arc<String>>,
     },
 }
 
