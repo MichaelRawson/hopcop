@@ -7,7 +7,7 @@ use std::io::Write;
 use crate::db::{Atom, DB};
 use crate::options::Options;
 use crate::subst::{Branch, Located, ROOT, Substituted, Substitution};
-use crate::syntax::{Clause, Extension, Literal, Matrix, Source, Term};
+use crate::syntax::{Clause, Extension, Literal, Matrix, Name, Source, Term};
 use crate::tableau::Tableau;
 use crate::tstp;
 
@@ -100,14 +100,46 @@ impl<'matrix> Search<'matrix> {
         writeln!(w, "% SZS output start CNFRefutation")?;
 
         let mut input_clauses = FnvHashSet::default();
+        let mut input_formulas = FnvHashSet::default();
         for location in self.tableau.locations() {
             let node = self.tableau[location];
             if !matches!(node.clause.info.source, Source::Axiom { .. }) {
                 continue;
             }
             let number = node.clause.info.number;
-            if input_clauses.insert(number) {
-                tstp::input_clause(w, node.clause)?;
+            if input_clauses.insert(number)
+                && let Source::Axiom {
+                    path,
+                    name,
+                    original,
+                } = &node.clause.info.source
+            {
+                if input_formulas.insert((path.clone(), name.clone()))
+                    && let Some(original) = original
+                {
+                    writeln!(w, "fof({name}, plain, {original}, file({path}, {name})).")?;
+                    if node.clause.info.negated {
+                        writeln!(
+                            w,
+                            "fof({name}_negated, plain, ~({original}), inference(negate_conjecture, [status(cth)], [{name}]))."
+                        )?;
+                    }
+                }
+                write!(w, "cnf({}, plain, ", node.clause.info.number)?;
+                let mut first = true;
+                for literal in &node.clause.literals {
+                    if !first {
+                        write!(w, " | ")?;
+                    }
+                    first = false;
+                    write!(w, "{literal}")?;
+                }
+                write!(w, ", inference(cnf, [status(esa)], [")?;
+                write!(w, "{name}")?;
+                if node.clause.info.negated {
+                    write!(w, "_negated")?;
+                }
+                writeln!(w, "])).")?;
             }
             write!(w, "cnf({location}, plain, ")?;
             let mut first = true;
@@ -159,8 +191,8 @@ impl<'matrix> Search<'matrix> {
             eprint!(" {}", atom);
         }
         eprintln!();
-        //eprintln!("substitution: {}", self.substitution);
-         */
+        eprintln!("substitution: {}", self.substitution);
+        */
 
         // learned clause empty initially, filled out by failing to apply rules below
         self.learn.clear();
@@ -339,6 +371,7 @@ impl<'matrix> Search<'matrix> {
 
         // try extension rules
         let Literal { polarity, atom } = node.clause.literals[open.index];
+        let is_disequation = !polarity && matches!(atom.symbol.name, Name::Equality);
         for extension in self
             .matrix
             .index
@@ -346,7 +379,7 @@ impl<'matrix> Search<'matrix> {
             .into_iter()
             .flatten()
         {
-            if self.extend(open, *extension) {
+            if self.extend(open, *extension, is_disequation) {
                 return true;
             }
         }
@@ -401,9 +434,10 @@ impl<'matrix> Search<'matrix> {
     }
 
     // try to extend at `open` with a particular `extension` step
-    fn extend(&mut self, open: Branch, extension: Extension) -> bool {
+    fn extend(&mut self, open: Branch, extension: Extension, is_disequation: bool) -> bool {
         let node = self.tableau[open.location];
-        let l = open.location.locate(node.clause.literals[open.index]);
+        let open_literal = node.clause.literals[open.index];
+        let l = open.location.locate(open_literal);
         let location = self.tableau.locate(open);
         let k = location.locate(extension.clause.literals[extension.index]);
         // if l and k could never unify, we don't need to consider this step further
@@ -449,6 +483,7 @@ impl<'matrix> Search<'matrix> {
                     // if not, add a "cannot reduce" atom
                     self.trail.insert(Atom::CannotReduce(ancestor, branch));
                 }
+
                 if ancestor.location == ROOT {
                     break;
                 }
@@ -463,6 +498,33 @@ impl<'matrix> Search<'matrix> {
                 .iter()
                 .map(|d| Atom::Disequation(location.locate(d.left), location.locate(d.right))),
         );
+
+        let mut ancestor = open;
+        while ancestor.location != ROOT {
+            ancestor = self.tableau[ancestor.location].branch;
+            let candidate = self.tableau[ancestor.location].clause.literals[ancestor.index];
+            if candidate.polarity != open_literal.polarity
+                && self.could_unify(ancestor.location.locate(candidate), l)
+            {
+                // if we could have reduced, we should have
+                self.trail.insert(Atom::Disequation(
+                    ancestor
+                        .location
+                        .locate(candidate)
+                        .map(|l| Term::App(l.atom)),
+                    l.map(|l| Term::App(l.atom)),
+                ));
+            }
+        }
+
+        // if we're extending a disequation, we can demand that either we close it with reflexivity
+        // or the two sides are not syntactically equal
+        if is_disequation && !matches!(extension.clause.info.source, Source::Reflexivity) {
+            self.trail.insert(Atom::Disequation(
+                l.map(|l| l.atom.args[0]),
+                l.map(|l| l.atom.args[1]),
+            ));
+        }
 
         // something bad, give up on this one
         if !self.check_trail_consistency(restore_trail) {
@@ -514,6 +576,7 @@ impl<'matrix> Search<'matrix> {
                 continue;
             };
             if self.substitution.equal(left, right) {
+                // eprintln!("failed disequation: {left} {right}");
                 self.explain_equal(left, right);
                 if index < self.learn_from {
                     self.learn.insert(atom);

@@ -169,7 +169,11 @@ pub(crate) enum Source {
     Symmetry,
     Transitivity,
     Congruence,
-    Axiom { path: Rc<String>, name: Rc<String> },
+    Axiom {
+        path: Rc<String>,
+        name: Rc<String>,
+        original: Option<Rc<String>>,
+    },
 }
 
 #[derive(Debug, Clone)]

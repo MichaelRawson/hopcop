@@ -2,8 +2,8 @@ use crate::pp::PP;
 use crate::syntax::{self, RcApplication, RcTerm, Sort};
 use anyhow::Context;
 use fnv::FnvHashSet;
-use memmap::Mmap;
 use std::error::Error;
+use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
 use std::{env, fmt, fs, path};
@@ -65,17 +65,6 @@ fn open_path(parent: Option<&path::Path>, path: &path::Path) -> anyhow::Result<f
     } else {
         open_path_no_parent(path)
     }
-}
-
-fn read_path(parent: Option<&path::Path>, path: &path::Path) -> anyhow::Result<Option<Mmap>> {
-    let file = open_path(parent, path)?;
-    let metadata = file.metadata()?;
-    let map = if metadata.len() > 0 {
-        Some(unsafe { Mmap::map(&file) }.context("memory-mapping file")?)
-    } else {
-        None
-    };
-    Ok(map)
 }
 
 #[derive(Default)]
@@ -371,6 +360,7 @@ impl Loader {
         selection: Option<&FnvHashSet<Name>>,
         path: Rc<String>,
         annotated: Annotated<D>,
+        original: Option<Rc<String>>,
     ) -> anyhow::Result<()> {
         if selection
             .map(|selection| !selection.contains(&annotated.name))
@@ -385,12 +375,13 @@ impl Loader {
         let source = syntax::Source::Axiom {
             path,
             name: format!("{}", &annotated.name).into(),
+            original,
         };
 
         self.fresh = 0;
         self.free.clear();
         let mut formula = annotated.formula.load(self)?;
-        if negate {
+        if is_goal {
             self.pp.builder.notify_have_conjecture();
             formula = formula.negated();
         }
@@ -405,10 +396,9 @@ impl Loader {
         path: &path::Path,
     ) -> anyhow::Result<()> {
         let display_path = Rc::new(format!("'{}'", path.display()));
-        let map = read_path(parent, path)?;
-        let bytes = map.as_deref().unwrap_or_default();
-        let statements = TPTPIterator::<()>::new(bytes);
-        for statement in statements {
+        let mut bytes = vec![];
+        open_path(parent, path)?.read_to_end(&mut bytes)?;
+        for statement in TPTPIterator::<()>::new(&bytes) {
             let statement = statement.map_err(|_| SyntaxError(path.display().to_string()))?;
             match statement {
                 TPTPInput::Annotated(annotated) => match *annotated {
@@ -416,10 +406,16 @@ impl Loader {
                         return Err(Unsupported(annotated.to_string()).into());
                     }
                     AnnotatedFormula::Fof(fof) => {
-                        self.annotated(selection.as_ref(), display_path.clone(), fof.0)?;
+                        let original = format!("{}", fof.0.formula).into();
+                        self.annotated(
+                            selection.as_ref(),
+                            display_path.clone(),
+                            fof.0,
+                            Some(original),
+                        )?;
                     }
                     AnnotatedFormula::Cnf(cnf) => {
-                        self.annotated(selection.as_ref(), display_path.clone(), cnf.0)?;
+                        self.annotated(selection.as_ref(), display_path.clone(), cnf.0, None)?;
                     }
                 },
                 TPTPInput::Include(include) => {

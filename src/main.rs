@@ -49,13 +49,22 @@ fn start(options: &Options) {
         search.step_or_backtrack();
     }
 
-    let stdout = stdout();
-    let mut lock = stdout.lock();
-    //search.graphviz();
-    search
-        .tstp(&mut lock, options)
-        .context("printing proof")
-        .unwrap_or_else(report_err);
+    if options.quiet {
+        let stdout = stdout();
+        let mut lock = stdout.lock();
+        tstp::theorem(&mut lock, options)
+            .context("reporting status")
+            .unwrap_or_else(report_err);
+    } else if options.graphviz {
+        search.graphviz();
+    } else {
+        let stdout = stdout();
+        let mut lock = stdout.lock();
+        search
+            .tstp(&mut lock, options)
+            .context("printing proof")
+            .unwrap_or_else(report_err);
+    }
     std::process::exit(0);
 }
 

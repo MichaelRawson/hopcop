@@ -28,6 +28,10 @@ pub(crate) struct Options {
     pub(crate) quiet: bool,
 
     #[arg(long)]
+    /// print graphviz instead of TSTP
+    pub(crate) graphviz: bool,
+
+    #[arg(long)]
     /// Enforce time limit (secs)
     pub(crate) time: Option<u64>,
 }

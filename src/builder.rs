@@ -47,6 +47,9 @@ impl Builder {
         } else {
             self.matrix.start = self.goals;
         }
+        for extensions in self.matrix.index.values_mut() {
+            extensions.sort_by_key(|e| e.clause.literals.len());
+        }
         self.matrix
     }
 
@@ -83,11 +86,12 @@ impl Builder {
                     left: l.atom.args[0],
                     right: l.atom.args[1],
                 };
+                self.subst.clear();
                 if self.subst.unify(
                     ROOT.locate(disequation.left),
                     ROOT.locate(disequation.right),
                 ) {
-                    disequations.push(disequation)
+                    disequations.push(disequation);
                 }
             }
         }
